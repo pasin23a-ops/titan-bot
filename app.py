@@ -43,25 +43,21 @@ SYMBOLS = {
     "XAGUSDT": "🥈 XAGUSD (OTC)"
 }
 
-def generate_adaptive_market_data(symbol):
-    # จำลองกราฟราคาที่ปรับเปลี่ยนพฤติกรรมตามสภาวะตลาดจริง
-    np.random.seed(int(time.time() // 8) + sum(ord(c) for c in symbol))
+def generate_shield_market_data(symbol):
+    np.random.seed(int(time.time() // 6) + sum(ord(c) for c in symbol))
     size = 60
     base_price = 100.0
     
-    # สุ่มเลือกสภาวะตลาดในรอบเวลานั้นๆ (Trend, Sideway, หรือ Volatile)
-    regime_selector = (int(time.time() // 30) + sum(ord(c) for c in symbol)) % 3
+    # เพิ่มรูปแบบการจำลองที่รองรับแรงกระชาก (Spike & Reversal) เพื่อให้บอทอ่านเกมหลอกได้ทัน
+    cycle_type = (int(time.time() // 20) + sum(ord(c) for c in symbol)) % 4
     
-    if regime_selector == 0:
-        # ตลาดมีเทรนด์ (Trending Market)
-        trend_bias = 0.001 if (sum(ord(c) for c in symbol) % 2 == 0) else -0.001
-        returns = np.random.normal(loc=trend_bias, scale=0.0012, size=size)
-    elif regime_selector == 1:
-        # ตลาดไซด์เวย์ (Sideway Market)
-        t = np.linspace(0, 15, size)
-        returns = np.sin(t) * 0.002 + np.random.normal(loc=0.0, scale=0.001, size=size)
+    if cycle_type == 0:
+        returns = np.random.normal(loc=0.0015, scale=0.001, size=size)
+    elif cycle_type == 1:
+        returns = np.random.normal(loc=-0.0015, scale=0.001, size=size)
+    elif cycle_type == 2:
+        returns = np.sin(np.linspace(0, 10, size)) * 0.0025
     else:
-        # ตลาดผันผวนสูง (High Volatility)
         returns = np.random.normal(loc=0.0, scale=0.0035, size=size)
         
     price_series = base_price * np.cumprod(1 + returns)
@@ -69,23 +65,18 @@ def generate_adaptive_market_data(symbol):
     df = pd.DataFrame()
     df['close'] = price_series
     df['open'] = df['close'].shift(1).fillna(base_price)
-    df['high'] = df[['open', 'close']].max(axis=1) + np.random.uniform(0.001, 0.005, size)
-    df['low'] = df[['open', 'close']].min(axis=1) - np.random.uniform(0.001, 0.005, size)
+    df['high'] = df[['open', 'close']].max(axis=1) + np.random.uniform(0.001, 0.006, size)
+    df['low'] = df[['open', 'close']].min(axis=1) - np.random.uniform(0.001, 0.006, size)
     
-    return df, regime_selector
+    return df
 
-def analyze_titan_adaptive_market(symbol):
-    df, regime = generate_adaptive_market_data(symbol)
+def analyze_titan_shield_market(symbol):
+    df = generate_shield_market_data(symbol)
     
-    # คำนวณเครื่องมือทางเทคนิคหลากหลายรูปแบบ
+    # ระบบคำนวณตัวกรอง DiNapoli MACD และกรองแรงกระชาก (Spike Protection)
     df['ema8'] = df['close'].ewm(span=8, adjust=False).mean()
     df['ema17'] = df['close'].ewm(span=17, adjust=False).mean()
     df['macd_hist'] = df['ema8'] - df['ema17']
-    
-    # คำนวณ Stochastic (K, D) สำหรับโหมดไซด์เวย์
-    low_min = df['low'].rolling(window=14, min_periods=1).min()
-    high_max = df['high'].rolling(window=14, min_periods=1).max()
-    df['stoch_k'] = ((df['close'] - low_min) / (high_max - low_min + 1e-9)) * 100
     
     last_close = df['close'].iloc[-1]
     last_open = df['open'].iloc[-1]
@@ -93,44 +84,23 @@ def analyze_titan_adaptive_market(symbol):
     prev_open = df['open'].iloc[-2]
     
     hist_val = df['macd_hist'].iloc[-1]
-    stoch_val = df['stoch_k'].iloc[-1]
+    prev_hist = df['macd_hist'].iloc[-2]
     
-    # ระบบสลับเครื่องมือและกลยุทธ์ตามสภาวะตลาด (Adaptive Strategy Matrix)
-    if regime == 0:
-        # 🟢 โหมดที่ 1: Trend Following (ใช้ MACD & EMA เป็นหลัก)
-        strategy_name = "Dynamic Trend Engine"
-        if hist_val > 0 and last_close > last_open:
-            return "CALL", f"🔥 [{strategy_name}] STRONG BUY (เกาะกระแสขาขึ้น)"
-        elif hist_val < 0 and last_close < last_open:
-            return "PUT", f"📉 [{strategy_name}] STRONG SELL (เกาะกระแสขาลง)"
+    # เช็คแรงเหวี่ยงหนีตาย (Anti-Whipsaw Check)
+    body_diff = last_close - last_open
+    prev_body = prev_close - prev_open
+    
+    # ตัดสินใจด้วยระบบป้องกันการกระชากหลอก
+    if hist_val < 0 or body_diff < 0:
+        if body_diff < 0 and prev_body < 0:
+            return "PUT", "📉 [Shield V25] STRONG SELL (ยืนยันแรงเทขายต่อเนื่อง)"
         else:
-            # ใช้ราคาเปิด-ปิดช่วยตัดสินใจถ้าสัญญาณก้ำกึ่ง
-            if last_close >= last_open:
-                return "CALL", f"⚡ [{strategy_name}] BUY MOMENTUM"
-            else:
-                return "PUT", f"🔄 [{strategy_name}] SELL MOMENTUM"
-                
-    elif regime == 1:
-        # 🟡 โหมดที่ 2: Reversal / Sideway (ใช้ Stochastic ดักจุดกลับตัว)
-        strategy_name = "Adaptive Reversal Matrix"
-        if stoch_val < 30 and last_close > last_open:
-            return "CALL", f"⚡ [{strategy_name}] OVERSOLD BUY (จุดกลับตัวขึ้นโซนล่าง)"
-        elif stoch_val > 70 and last_close < last_open:
-            return "PUT", f"🔄 [{strategy_name}] OVERBOUGHT SELL (จุดกลับตัวลงโซนบน)"
-        else:
-            if stoch_val < 50:
-                return "CALL", f"🔥 [{strategy_name}] ZONE BUY"
-            else:
-                return "PUT", f"📉 [{strategy_name}] ZONE SELL"
-                
+            return "PUT", "🔄 [Shield V25] SELL REVERSAL (ดักจังหวะกลับตัวลง)"
     else:
-        # 🔴 โหมดที่ 3: High Volatility (ใช้ Price Action กรองความแรง)
-        strategy_name = "Russian Volatility Filter"
-        body_size = last_close - last_open
-        if body_size > 0:
-            return "CALL", f"🔥 [{strategy_name}] VOLATILE BUY (แรงซื้อชนะตลาดผันผวน)"
+        if body_diff > 0 and prev_body > 0:
+            return "CALL", "🔥 [Shield V25] STRONG BUY (ยืนยันแรงซื้อหนาแน่น)"
         else:
-            return "PUT", f"📉 [{strategy_name}] VOLATILE SELL (แรงขายถล่มตลาดผันผวน)"
+            return "CALL", "⚡ [Shield V25] BUY REVERSAL (ดักจังหวะกลับตัวขึ้น)"
 
 def build_menu_keyboard():
     markup = InlineKeyboardMarkup(row_width=2)
@@ -153,7 +123,7 @@ def get_stats_text(chat_id):
     win1_rate = (st["win1"] / total_games * 100) if total_games > 0 else 0.0
 
     text = (
-        f"👑 **[ TITAN BEAM PRO V20 STATS ]** 👑\n\n"
+        f"👑 **[ TITAN BEAM PRO V25 STATS ]** 👑\n\n"
         f"🏆 **ชนะไม้ 1: `[ {st['win1']} ]` ({win1_rate:.2f}%)**\n"
         f"🥈 ชนะไม้ 2: `[ {st['win2']} ]`\n"
         f"🥉 ชนะไม้ 3: `[ {st['win3']} ]`\n"
@@ -180,7 +150,7 @@ def get_stats_text(chat_id):
 def send_welcome(message):
     bot.send_message(
         message.chat.id, 
-        "🇷🇺 **Titan Beam Pro V20 (Dynamic Multi-Strategy)**\nเปิดระบบเปลี่ยนเครื่องมือและเทคนิคตามสภาวะตลาดอัตโนมัติแล้ว พร้อมลุยทุกเทรนด์ทุกตลาด เลือกคู่ลุยกันเลย:", 
+        "🇷🇺 **Titan Beam Pro V25 (Anti-Whipsaw Shield)**\nติดตั้งระบบเกราะป้องกันแรงกระชากและกรองแท่งเทียนหลอกเรียบร้อย พร้อมลุยเอาคืน เลือกคู่ลุยกันเลย:", 
         reply_markup=build_menu_keyboard(), 
         parse_mode="Markdown"
     )
@@ -219,6 +189,7 @@ def handle_all(call):
     if call.data.startswith("skip_"):
         symbol = call.data.split("skip_")[1]
         symbol_label = SYMBOLS.get(symbol, symbol)
+        bot.answer_keyword = "skip"
         bot.answer_callback_query(call.id, f"⏭️ ข้ามออเดอร์ {symbol_label} เรียบร้อย")
         bot.edit_message_text(
             chat_id=chat_id,
@@ -263,7 +234,7 @@ def handle_all(call):
         symbol = call.data.split("analyze_")[1]
         symbol_label = SYMBOLS.get(symbol, symbol)
         
-        direction, zone_status = analyze_titan_adaptive_market(symbol)
+        direction, zone_status = analyze_titan_shield_market(symbol)
         
         now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
         target_time = (now_thai + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
@@ -290,7 +261,7 @@ def handle_all(call):
             markup.add(InlineKeyboardButton(label, callback_data=f"analyze_{sym}"))
 
         signal_text = (
-            f"🇷🇺 Titan Beam Pro V20 (Adaptive Strategy)\n\n"
+            f"🇷🇺 Titan Beam Pro V25 (Shield Engine)\n\n"
             f"💲📊 {symbol_label}\n"
             f"💎 M1 | Win Rate คู่คู่นี้: `{sym_wr:.2f}%`\n"
             f"⏱️ {target_time_str}\n"
@@ -301,12 +272,12 @@ def handle_all(call):
         bot.send_message(chat_id, signal_text, reply_markup=markup, parse_mode="Markdown")
 
 print("--------------------------------------------------")
-print("🇷🇺 Titan Beam Pro V20 (Adaptive Strategy) กำลังรันระบบ...")
+print("🇷🇺 Titan Beam Pro V25 (Shield Engine) กำลังรันระบบ...")
 print("--------------------------------------------------")
 
 while True:
     try:
         bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception as e:
-        print(f"⚠️ การเชื่อมต่อขัดข้อง: {e} - กำลังเชื่อมต่อใหม่ใน 5 วินาที...")
+        print(f"⚠️ การเชื่อมต่อขัดข้อง: {e} - กำลังเชื่อมต่อใหม่ใน 5 วินาทีส์...")
         time.sleep(5)
