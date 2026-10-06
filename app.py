@@ -108,14 +108,10 @@ def analyze_ultra_market(symbol):
     macd_hist = df['MACD_Hist'].iloc[-1]
     rsi = df['RSI'].iloc[-1]
     stoch_k = df['Stoch_K'].iloc[-1]
-    bb_width = df['BB_Width'].iloc[-1]
-    avg_bb_width = df['BB_Width'].rolling(window=20).mean().iloc[-1]
     
     is_green = df['IsGreen'].iloc[-1]
     is_red = df['IsRed'].iloc[-1]
     
-    # ระบบกรองความคมขั้นสูง V12 (Ultra-Precision Filter)
-    # บังคับเช็กแท่งเทียนปัจจุบันร่วมกับทิศทางโมเมนตัมหลักเพื่อลดความผิดพลาด
     is_strong_uptrend = (ema3 > ema7 > ema14) and (macd_hist > 0) and (rsi > 50)
     is_strong_downtrend = (ema3 < ema7 < ema14) and (macd_hist < 0) and (rsi < 50)
     
@@ -130,13 +126,11 @@ def analyze_ultra_market(symbol):
         else:
             return "PUT", "📉 V12 Ultra Trend: RALLY SELL (เด้งขายตามเทรนด์ขาลง)"
     else:
-        # กรณีตลาดไซด์เวย์หรือกรอบแคบ ใช้การเช็ก Overbought/Oversold ที่เข้มงวดขึ้น
         if stoch_k < 20 and is_green:
             return "CALL", "🔄 V12 Reversal: OVERSOLD BOUNCE (BUY)"
         elif stoch_k > 80 and is_red:
             return "PUT", "🔄 V12 Reversal: OVERBOUGHT DROP (SELL)"
         else:
-            # ถ้าไม่เข้าข่าย ให้ยึดตามทิศทางแท่งเทียนล่าสุดเพื่อความชัวร์ไม่สวนพร่ำเพรื่อ
             if is_green:
                 return "CALL", "⚡ V12 Momentum: FOLLOW BUY"
             else:
@@ -275,8 +269,9 @@ def handle_all(call):
         
         direction, zone_status = analyze_ultra_market(symbol)
         
-        now = datetime.datetime.now()
-        target_time = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
+        # ปรับเวลาให้เป็นเวลาประเทศไทย (UTC+7) โดยบวกเพิ่ม 7 ชั่วโมงจาก UTC
+        now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
+        target_time = (now_thai + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
         target_time_str = target_time.strftime('%H:%M')
         
         if symbol not in symbol_stats[chat_id]:
@@ -318,5 +313,5 @@ while True:
     try:
         bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception as e:
-        print(f"⚠️ การเชื่อมต่อขัดข้อง: {e} - กำลังเชื่อมต่อใหม่ใน 5 วินาที...")
+        print(f"⚠️️ การเชื่อมต่อขัดข้อง: {e} - กำลังเชื่อมต่อใหม่ใน 5 วินาที...")
         time.sleep(5)
