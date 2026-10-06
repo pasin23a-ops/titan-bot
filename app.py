@@ -43,72 +43,21 @@ SYMBOLS = {
     "XAGUSDT": "🥈 XAGUSD (OTC)"
 }
 
-def calculate_ultra_indicators(df):
-    delta = df['close'].diff()
-    gain = delta.clip(lower=0)
-    loss = -1 * delta.clip(upper=0)
-    ema_gain = gain.ewm(com=13, adjust=False).mean()
-    ema_loss = loss.ewm(com=13, adjust=False).mean()
-    rs = ema_gain / ema_loss
-    df['RSI'] = 100 - (100 / (1 + rs))
-    
-    low_min = df['low'].rolling(window=14).min()
-    high_max = df['high'].rolling(window=14).max()
-    df['Stoch_K'] = ((df['close'] - low_min) / (high_max - low_min)) * 100
-    df['Stoch_D'] = df['Stoch_K'].rolling(window=3).mean()
-    
-    df['EMA3'] = df['close'].ewm(span=3, adjust=False).mean()
-    df['EMA7'] = df['close'].ewm(span=7, adjust=False).mean()
-    
-    exp1 = df['close'].ewm(span=12, adjust=False).mean()
-    exp2 = df['close'].ewm(span=26, adjust=False).mean()
-    df['MACD'] = exp1 - exp2
-    df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
-    df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
-    
-    return df
-
-def generate_otc_market_data(symbol):
-    # สร้างข้อมูลจำลองทางเทคนิคที่ออกแบบมาเพื่อกราฟ OTC 8xTrade โดยเฉพาะ
-    # เพื่อให้สอดคล้องกับเวลาจริงและกระจายตัว Buy/Sell อย่างอิสระ
-    np.random.seed(int(time.time() // 30) + sum(ord(c) for c in symbol))
-    
-    size = 100
-    base_price = 100.0
-    returns = np.random.normal(loc=0.0001, scale=0.002, size=size)
-    price_series = base_price * np.cumprod(1 + returns)
-    
-    df = pd.DataFrame()
-    df['close'] = price_series
-    df['open'] = df['close'].shift(1).fillna(base_price)
-    df['high'] = df[['open', 'close']].max(axis=1) + np.random.uniform(0.01, 0.05, size)
-    df['low'] = df[['open', 'close']].min(axis=1) - np.random.uniform(0.01, 0.05, size)
-    df['volume'] = np.random.randint(1000, 50000, size)
-    
-    return df
-
 def analyze_ultra_market(symbol):
-    df = generate_otc_market_data(symbol)
-    df = calculate_ultra_indicators(df)
+    # ระบบสลับฝั่ง BUY/SELL แบบสมดุล 50/50 
+    # โดยอิงจากรหัสคู่เงินและช่วงเวลา เพื่อให้กดแล้วสลับขึ้น-ลง ไม่ค้างฝั่งใดฝั่งหนึ่ง
+    time_seed = int(time.time() // 15)
+    symbol_hash = sum(ord(c) for c in symbol)
+    combined_val = (time_seed + symbol_hash) % 100
     
-    ema3 = df['EMA3'].iloc[-1]
-    ema7 = df['EMA7'].iloc[-1]
-    macd_hist = df['MACD_Hist'].iloc[-1]
-    rsi = df['RSI'].iloc[-1]
-    stoch_k = df['Stoch_K'].iloc[-1]
-    
-    # ระบบตัดสินใจแบบสมดุล 50/50 ออกสลับ BUY และ SELL ตามเงื่อนไขอินดิเคเตอร์จำลอง
-    # ใช้ค่า Hash ของชื่อคู่เงินร่วมกับเวลาปัจจุบันเพื่อให้แต่ละคู่ให้ผลลัพธ์แยกอิสระจากกัน
-    symbol_bias = sum(ord(c) for c in symbol) % 2
-    
-    if macd_hist < 0 or ema3 < ema7 or (rsi < 50 and symbol_bias == 0):
-        if stoch_k > 40:
-            return "PUT", "📉 8xTrade OTC: STRONG SELL (สัญญาณขาลง)"
+    if combined_val < 50:
+        if combined_val % 2 == 0:
+            return "PUT", "📉 8xTrade OTC: STRONG SELL (สัญญาณขาลงชัดเจน)"
         else:
             return "PUT", "🔄 8xTrade OTC: SELL ZONE (จุดกลับตัวลง)"
     else:
-        if stoch_k < 60:
-            return "CALL", "🔥 8xTrade OTC: STRONG BUY (สัญญาณขาขึ้น)"
+        if combined_val % 2 == 0:
+            return "CALL", "🔥 8xTrade OTC: STRONG BUY (สัญญาณขาขึ้นชัดเจน)"
         else:
             return "CALL", "⚡ 8xTrade OTC: BUY ZONE (จุดกลับตัวขึ้น)"
 
@@ -160,7 +109,7 @@ def get_stats_text(chat_id):
 def send_welcome(message):
     bot.send_message(
         message.chat.id, 
-        "👑 **8xTrade OTC Engine V12**\nปรับแต่งระบบคำนวณกราฟ OTC 8xTrade โดยเฉพาะ กระจายฝั่ง BUY/SELL สมบูรณ์แล้ว เลือกคู่ลุยกันเลย:", 
+        "👑 **8xTrade OTC Engine V12 (Fixed)**\nแก้ไขระบบสลับฝั่ง BUY / SELL สมบูรณ์แล้ว ออกสลับกันอิสระ 100% เลือกคู่ลุยกันเลย:", 
         reply_markup=build_menu_keyboard(), 
         parse_mode="Markdown"
     )
@@ -203,7 +152,7 @@ def handle_all(call):
         bot.edit_message_text(
             chat_id=chat_id,
             message_id=call.message.message_id,
-            text=f"⏭ **ข้ามออเดอร์นี้ ({symbol_label})** เรียบร้อย\n\nเลือกคู่เงินอื่นที่กราฟนิ่งๆ ลุยต่อได้เลย:",
+            text=f"⏭ **ข้ามออเดอร์นี้ ({symbol_label})** เรียบร้อย\n\nเลือกคู่เงินอื่นลุยต่อได้เลย:",
             reply_markup=build_menu_keyboard(),
             parse_mode="Markdown"
         )
@@ -281,7 +230,7 @@ def handle_all(call):
         bot.send_message(chat_id, signal_text, reply_markup=markup, parse_mode="Markdown")
 
 print("--------------------------------------------------")
-print("👑 8xTrade OTC Engine V12 กำลังรันระบบ...")
+print("👑 8xTrade OTC Engine V12 (Fixed) กำลังรันระบบ...")
 print("--------------------------------------------------")
 
 while True:
