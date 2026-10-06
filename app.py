@@ -112,29 +112,21 @@ def analyze_ultra_market(symbol):
     is_green = df['IsGreen'].iloc[-1]
     is_red = df['IsRed'].iloc[-1]
     
-    is_strong_uptrend = (ema3 > ema7 > ema14) and (macd_hist > 0) and (rsi > 50)
-    is_strong_downtrend = (ema3 < ema7 < ema14) and (macd_hist < 0) and (rsi < 50)
-    
-    if is_strong_uptrend:
-        if is_green:
-            return "CALL", "🔥 V12 Ultra Trend: STRONG BUY (ตามแรงซื้อเขียว)"
-        else:
-            return "CALL", "🔥 V12 Ultra Trend: DIP BUY (ย่อซื้อตามเทรนด์ขาขึ้น)"
-    elif is_strong_downtrend:
-        if is_red:
-            return "PUT", "📉 V12 Ultra Trend: STRONG SELL (ตามแรงขายแดง)"
-        else:
-            return "PUT", "📉 V12 Ultra Trend: RALLY SELL (เด้งขายตามเทรนด์ขาลง)"
+    # เงื่อนไขความคมชัดระดับสูง (High Precision V12) แยกฝั่งซื้อและขายสมดุล
+    if ema3 > ema7 and macd_hist > 0 and rsi > 50:
+        return "CALL", "🔥 V12 Trend: STRONG BUY (โมเมนตัมขาขึ้นคมชัด)"
+    elif ema3 < ema7 and macd_hist < 0 and rsi < 50:
+        return "PUT", "📉 V12 Trend: STRONG SELL (โมเมนตัมขาลงคมชัด)"
+    elif stoch_k < 25:
+        return "CALL", "🔄 V12 Reversal: OVERSOLD BUY (จุดกลับตัวโซนล่าง)"
+    elif stoch_k > 75:
+        return "PUT", "🔄 V12 Reversal: OVERBOUGHT SELL (จุดกลับตัวโซนบน)"
     else:
-        if stoch_k < 20 and is_green:
-            return "CALL", "🔄 V12 Reversal: OVERSOLD BOUNCE (BUY)"
-        elif stoch_k > 80 and is_red:
-            return "PUT", "🔄 V12 Reversal: OVERBOUGHT DROP (SELL)"
+        # หากกึ่งกลาง ใช้แรงแท่งเทียนปัจจุบันตัดสินใจอย่างเท่าเทียม
+        if is_green:
+            return "CALL", "⚡ V12 Momentum: FOLLOW BUY"
         else:
-            if is_green:
-                return "CALL", "⚡ V12 Momentum: FOLLOW BUY"
-            else:
-                return "PUT", "⚡ V12 Momentum: FOLLOW SELL"
+            return "PUT", "⚡ V12 Momentum: FOLLOW SELL"
 
 def build_menu_keyboard():
     markup = InlineKeyboardMarkup(row_width=2)
@@ -184,7 +176,7 @@ def get_stats_text(chat_id):
 def send_welcome(message):
     bot.send_message(
         message.chat.id, 
-        "👑 **Ultra-Precision V12 พร้อมรบแล้ว!**\nเพิ่มระบบกรองสัญญาณอัจฉริยะ แม่นยำกว่าเดิม เลือกคู่ลุยกันเลย:", 
+        "👑 **Ultra-Precision V12 พร้อมรบแล้ว!**\nระบบคำนวณแมนยำสูง ออกทั้งขึ้นและลงสมดุล เลือกคู่ลุยกันเลย:", 
         reply_markup=build_menu_keyboard(), 
         parse_mode="Markdown"
     )
@@ -227,7 +219,7 @@ def handle_all(call):
         bot.edit_message_text(
             chat_id=chat_id,
             message_id=call.message.message_id,
-            text=f"⏭️ **ข้ามออเดอร์นี้ ({symbol_label})** เรียบร้อย\n\nเลือกคู่เงินอื่นที่กราฟนิ่งๆ ลุยต่อได้เลย:",
+            text=f"⏭ **ข้ามออเดอร์นี้ ({symbol_label})** เรียบร้อย\n\nเลือกคู่เงินอื่นที่กราฟนิ่งๆ ลุยต่อได้เลย:",
             reply_markup=build_menu_keyboard(),
             parse_mode="Markdown"
         )
@@ -269,7 +261,7 @@ def handle_all(call):
         
         direction, zone_status = analyze_ultra_market(symbol)
         
-        # ปรับเวลาให้เป็นเวลาประเทศไทย (UTC+7) โดยบวกเพิ่ม 7 ชั่วโมงจาก UTC
+        # ดึงเวลาประเทศไทย (UTC+7)
         now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
         target_time = (now_thai + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
         target_time_str = target_time.strftime('%H:%M')
@@ -313,5 +305,5 @@ while True:
     try:
         bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception as e:
-        print(f"⚠️️ การเชื่อมต่อขัดข้อง: {e} - กำลังเชื่อมต่อใหม่ใน 5 วินาที...")
+        print(f"⚠️ การเชื่อมต่อขัดข้อง: {e} - กำลังเชื่อมต่อใหม่ใน 5 วินาที...")
         time.sleep(5)
