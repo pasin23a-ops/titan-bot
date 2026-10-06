@@ -59,24 +59,15 @@ def calculate_ultra_indicators(df):
     
     df['EMA3'] = df['close'].ewm(span=3, adjust=False).mean()
     df['EMA7'] = df['close'].ewm(span=7, adjust=False).mean()
-    df['EMA14'] = df['close'].ewm(span=14, adjust=False).mean()
     
-    exp1 = df['close'].ewm(span=8, adjust=False).mean()
-    exp2 = df['close'].ewm(span=17, adjust=False).mean()
+    exp1 = df['close'].ewm(span=12, adjust=False).mean()
+    exp2 = df['close'].ewm(span=26, adjust=False).mean()
     df['MACD'] = exp1 - exp2
     df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
     df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
     
-    df['BB_Middle'] = df['close'].rolling(window=20).mean()
-    std = df['close'].rolling(window=20).std()
-    df['BB_Upper'] = df['BB_Middle'] + (std * 2.0)
-    df['BB_Lower'] = df['BB_Middle'] - (std * 2.0)
-    df['BB_Width'] = (df['BB_Upper'] - df['BB_Lower']) / df['BB_Middle']
-    
     df['IsGreen'] = df['close'] > df['open']
     df['IsRed'] = df['close'] < df['open']
-    df['Body'] = abs(df['close'] - df['open'])
-    df['PrevBody'] = df['Body'].shift(1)
     
     return df
 
@@ -110,21 +101,17 @@ def analyze_ultra_market(symbol):
     rsi = df['RSI'].iloc[-1]
     stoch_k = df['Stoch_K'].iloc[-1]
     
-    # ปรับเงื่อนไขให้สมดุลและไวต่อฝั่ง PUT (ลง) และ CALL (ขึ้น) เท่าๆ กัน
-    if macd_hist < 0 and rsi < 50:
-        return "PUT", "📉 V12 Trend: STRONG SELL (โมเมนตัมขาลง)"
-    elif macd_hist > 0 and rsi > 50:
-        return "CALL", "🔥 V12 Trend: STRONG BUY (โมเมนตัมขาขึ้น)"
-    elif stoch_k < 40:
-        return "CALL", "🔄 V12 Reversal: OVERSOLD BUY"
-    elif stoch_k > 60:
-        return "PUT", "🔄 V12 Reversal: OVERBOUGHT SELL"
-    else:
-        # ตัดสินใจจากแท่งเทียนล่าสุดตรงๆ หากราคาปิดต่ำกว่าราคาเปิด ออก PUT ทันที
-        if close_p < open_p:
-            return "PUT", "⚡ V12 Momentum: FOLLOW SELL"
+    # ระบบตัดสินใจใหม่ บังคับให้ออกทั้ง 2 ฝั่งอย่างสมดุล (ไม่ล็อกฝั่ง BUY อีกต่อไป)
+    if macd_hist < 0 or ema3 < ema7 or rsi < 48:
+        if stoch_k > 50:
+            return "PUT", "📉 V12 Trend: STRONG SELL (สัญญาณขาลง)"
         else:
-            return "CALL", "⚡ V12 Momentum: FOLLOW BUY"
+            return "PUT", "🔄 V12 Reversal: SELL ZONE"
+    else:
+        if stoch_k < 50:
+            return "CALL", "🔥 V12 Trend: STRONG BUY (สัญญาณขาขึ้น)"
+        else:
+            return "CALL", "⚡ V12 Momentum: BUY ZONE"
 
 def build_menu_keyboard():
     markup = InlineKeyboardMarkup(row_width=2)
@@ -174,7 +161,7 @@ def get_stats_text(chat_id):
 def send_welcome(message):
     bot.send_message(
         message.chat.id, 
-        "👑 **Ultra-Precision V12 พร้อมรบแล้ว!**\nแก้ระบบออกสัญญาณฝั่งลง (PUT) เรียบร้อย เลือกคู่ลุยกันเลย:", 
+        "👑 **Ultra-Precision V12 (Fixed Balance Engine)**\nปลดล็อกฝั่ง SELL/PUT เรียบร้อย เลือกคู่ลุยกันเลย:", 
         reply_markup=build_menu_keyboard(), 
         parse_mode="Markdown"
     )
