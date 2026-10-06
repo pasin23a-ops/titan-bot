@@ -102,31 +102,29 @@ def analyze_ultra_market(symbol):
     
     df = calculate_ultra_indicators(df)
     
+    close_p = df['close'].iloc[-1]
+    open_p = df['open'].iloc[-1]
     ema3 = df['EMA3'].iloc[-1]
     ema7 = df['EMA7'].iloc[-1]
-    ema14 = df['EMA14'].iloc[-1]
     macd_hist = df['MACD_Hist'].iloc[-1]
     rsi = df['RSI'].iloc[-1]
     stoch_k = df['Stoch_K'].iloc[-1]
     
-    is_green = df['IsGreen'].iloc[-1]
-    is_red = df['IsRed'].iloc[-1]
-    
-    # เงื่อนไขความคมชัดระดับสูง (High Precision V12) แยกฝั่งซื้อและขายสมดุล
-    if ema3 > ema7 and macd_hist > 0 and rsi > 50:
-        return "CALL", "🔥 V12 Trend: STRONG BUY (โมเมนตัมขาขึ้นคมชัด)"
-    elif ema3 < ema7 and macd_hist < 0 and rsi < 50:
-        return "PUT", "📉 V12 Trend: STRONG SELL (โมเมนตัมขาลงคมชัด)"
-    elif stoch_k < 25:
-        return "CALL", "🔄 V12 Reversal: OVERSOLD BUY (จุดกลับตัวโซนล่าง)"
-    elif stoch_k > 75:
-        return "PUT", "🔄 V12 Reversal: OVERBOUGHT SELL (จุดกลับตัวโซนบน)"
+    # ปรับเงื่อนไขให้สมดุลและไวต่อฝั่ง PUT (ลง) และ CALL (ขึ้น) เท่าๆ กัน
+    if macd_hist < 0 and rsi < 50:
+        return "PUT", "📉 V12 Trend: STRONG SELL (โมเมนตัมขาลง)"
+    elif macd_hist > 0 and rsi > 50:
+        return "CALL", "🔥 V12 Trend: STRONG BUY (โมเมนตัมขาขึ้น)"
+    elif stoch_k < 40:
+        return "CALL", "🔄 V12 Reversal: OVERSOLD BUY"
+    elif stoch_k > 60:
+        return "PUT", "🔄 V12 Reversal: OVERBOUGHT SELL"
     else:
-        # หากกึ่งกลาง ใช้แรงแท่งเทียนปัจจุบันตัดสินใจอย่างเท่าเทียม
-        if is_green:
-            return "CALL", "⚡ V12 Momentum: FOLLOW BUY"
-        else:
+        # ตัดสินใจจากแท่งเทียนล่าสุดตรงๆ หากราคาปิดต่ำกว่าราคาเปิด ออก PUT ทันที
+        if close_p < open_p:
             return "PUT", "⚡ V12 Momentum: FOLLOW SELL"
+        else:
+            return "CALL", "⚡ V12 Momentum: FOLLOW BUY"
 
 def build_menu_keyboard():
     markup = InlineKeyboardMarkup(row_width=2)
@@ -176,7 +174,7 @@ def get_stats_text(chat_id):
 def send_welcome(message):
     bot.send_message(
         message.chat.id, 
-        "👑 **Ultra-Precision V12 พร้อมรบแล้ว!**\nระบบคำนวณแมนยำสูง ออกทั้งขึ้นและลงสมดุล เลือกคู่ลุยกันเลย:", 
+        "👑 **Ultra-Precision V12 พร้อมรบแล้ว!**\nแก้ระบบออกสัญญาณฝั่งลง (PUT) เรียบร้อย เลือกคู่ลุยกันเลย:", 
         reply_markup=build_menu_keyboard(), 
         parse_mode="Markdown"
     )
@@ -261,7 +259,6 @@ def handle_all(call):
         
         direction, zone_status = analyze_ultra_market(symbol)
         
-        # ดึงเวลาประเทศไทย (UTC+7)
         now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
         target_time = (now_thai + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
         target_time_str = target_time.strftime('%H:%M')
