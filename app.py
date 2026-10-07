@@ -8,7 +8,7 @@ import requests
 import xml.etree.ElementTree as ET
 
 # ==========================================
-# API Token ใหม่ของคุณ
+# API Token ของคุณ
 # ==========================================
 BOT_TOKEN = "8822727043:AAEEKA96HNfVXO4CMYF7GxBTXq9q_uQhU4Y"
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -326,4 +326,25 @@ def handle_all(call):
             f"🇷🇺 **Titan Beam Pro V70 (Adaptive Dynamic)**\n\n"
             f"🎯 **คำแนะนำ: ออกออเดอร์ `[ ไม้ที่ {current_step} ]`**\n"
             f"💲📊 {symbol_label}\n"
-            f"💎 M1 | Win Rate: `{
+            f"💎 M1 | Win Rate: `{sym_wr:.2f}%`\n"
+            f"⏱️ เวลาเป้าหมาย: `{target_time_str}`\n\n"
+            f"🕹️ **[ Real-time Mode Switching ]**\n"
+            f"• {tech_used}\n"
+            f"• {ttz_desc}\n"
+            f"• {news_status}\n"
+            f"• {zone_status}\n\n"
+            f"📈 ทิศทางสัญญาณ: **{'BUY 🟢' if direction == 'CALL' else 'SELL 🔴'}**"
+        )
+
+        bot.send_message(chat_id, signal_text, reply_markup=markup, parse_mode="Markdown")
+
+print("--------------------------------------------------")
+print("🇷🇺 Titan Beam Pro V70 (Adaptive Dynamic Engine) กำลังรันระบบ...")
+print("--------------------------------------------------")
+
+while True:
+    try:
+        bot.polling(none_stop=True, interval=0, timeout=20)
+    except Exception as e:
+        print(f"⚠️ การเชื่อมต่อขัดข้อง: {e} - กำลังเชื่อมต่อใหม่ใน 5 วินาที...")
+        time.sleep(5)
