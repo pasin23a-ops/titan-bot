@@ -8,9 +8,9 @@ import requests
 import xml.etree.ElementTree as ET
 
 # ==========================================
-# API Token ของคุณ
+# API Token ใหม่ของคุณ
 # ==========================================
-BOT_TOKEN = "8992651389:AAEo7yoADLGn863tac0nTkxrvy36BFZNCqU"
+BOT_TOKEN = "8822727043:AAEEKA96HNfVXO4CMYF7GxBTXq9q_uQhU4Y"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 INTERVAL = "1m"
@@ -80,16 +80,12 @@ def generate_adaptive_market_data(symbol):
     size = 60
     base_price = 100.0
     
-    # จำลองสภาวะตลาด 3 รูปแบบ (Trend / Sideway / Volatile)
     regime = (int(time.time() // 10) + sum(ord(c) for c in symbol)) % 3
     if regime == 0:
-        # Trending Market
         returns = np.random.normal(loc=0.003, scale=0.0005, size=size)
     elif regime == 1:
-        # Sideway Market
         returns = np.random.normal(loc=0.0, scale=0.001, size=size)
     else:
-        # High Volatility Market
         returns = np.random.normal(loc=0.0, scale=0.004, size=size)
         
     price_series = base_price * np.cumprod(1 + returns)
@@ -110,14 +106,11 @@ def calculate_rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 def analyze_adaptive_market(symbol):
-    """วิเคราะห์สภาวะตลาดแบบเรียลไทม์ และเลือกเครื่องมือวิเคราะห์ที่เหมาะสมที่สุด"""
     df = generate_adaptive_market_data(symbol)
     
-    # 1. คำนวณค่าความผันผวน (ATR Proxy / Standard Deviation)
     df['returns'] = df['close'].pct_change()
     volatility = df['returns'].std()
     
-    # 2. คำนวณ Trend Strength (EMA Slope)
     df['ema5'] = df['close'].ewm(span=5, adjust=False).mean()
     df['ema20'] = df['close'].ewm(span=20, adjust=False).mean()
     trend_diff = abs(df['ema5'].iloc[-1] - df['ema20'].iloc[-1]) / df['ema20'].iloc[-1]
@@ -125,7 +118,6 @@ def analyze_adaptive_market(symbol):
     last_close = df['close'].iloc[-1]
     last_open = df['open'].iloc[-1]
     
-    # --- MODE 1: HIGH VOLATILITY (ผันผวนสูง สลับใช้ Bollinger Band Squeeze Filter) ---
     if volatility > 0.003:
         tech_used = "⚙️ [Technique] Volatility Breaker Engine (ดักไส้เทียนผันผวน)"
         if last_close > last_open:
@@ -133,7 +125,6 @@ def analyze_adaptive_market(symbol):
         else:
             return "PUT", "⚠️ [V70 Adaptive] HIGH VOLATILITY - SELL WITH CAUTION", tech_used
 
-    # --- MODE 2: TRENDING MARKET (มีเทรนด์ชัดเจน สลับใช้ EMA Cross + DiNapoli MACD) ---
     elif trend_diff > 0.0015:
         tech_used = "⚙️ [Technique] Trend Following Engine (EMA5/20 + MACD Momentum)"
         df['macd_hist'] = df['ema5'] - df['ema20']
@@ -144,7 +135,6 @@ def analyze_adaptive_market(symbol):
         else:
             return "PUT", "📉 [V70 Adaptive] STRONG TREND SELL", tech_used
 
-    # --- MODE 3: SIDEWAY / RANGING MARKET (วิ่งในกรอบ สลับใช้ RSI Reversal Filter) ---
     else:
         tech_used = "⚙️ [Technique] Range Bound Engine (RSI Mean Reversion + แนวรับแนวต้าน)"
         df['rsi'] = calculate_rsi(df['close'], period=14)
@@ -336,25 +326,4 @@ def handle_all(call):
             f"🇷🇺 **Titan Beam Pro V70 (Adaptive Dynamic)**\n\n"
             f"🎯 **คำแนะนำ: ออกออเดอร์ `[ ไม้ที่ {current_step} ]`**\n"
             f"💲📊 {symbol_label}\n"
-            f"💎 M1 | Win Rate: `{sym_wr:.2f}%`\n"
-            f"⏱️ เวลาเป้าหมาย: `{target_time_str}`\n\n"
-            f"🕹️ **[ Real-time Mode Switching ]**\n"
-            f"• {tech_used}\n"
-            f"• {ttz_desc}\n"
-            f"• {news_status}\n"
-            f"• {zone_status}\n\n"
-            f"📈 ทิศทางสัญญาณ: **{'BUY 🟢' if direction == 'CALL' else 'SELL 🔴'}**"
-        )
-
-        bot.send_message(chat_id, signal_text, reply_markup=markup, parse_mode="Markdown")
-
-print("--------------------------------------------------")
-print("🇷🇺 Titan Beam Pro V70 (Adaptive Dynamic Engine) กำลังรันระบบ...")
-print("--------------------------------------------------")
-
-while True:
-    try:
-        bot.polling(none_stop=True, interval=0, timeout=20)
-    except Exception as e:
-        print(f"⚠️ การเชื่อมต่อขัดข้อง: {e} - กำลังเชื่อมต่อใหม่ใน 5 วินาที...")
-        time.sleep(5)
+            f"💎 M1 | Win Rate: `{
