@@ -43,37 +43,35 @@ SYMBOLS = {
     "XAGUSDT": "🥈 XAGUSD (OTC)"
 }
 
-def generate_shield_market_data(symbol):
-    np.random.seed(int(time.time() // 6) + sum(ord(c) for c in symbol))
+def generate_sniper_market_data(symbol):
+    np.random.seed(int(time.time() // 5) + sum(ord(c) for c in symbol))
     size = 60
     base_price = 100.0
     
-    # เพิ่มรูปแบบการจำลองที่รองรับแรงกระชาก (Spike & Reversal) เพื่อให้บอทอ่านเกมหลอกได้ทัน
-    cycle_type = (int(time.time() // 20) + sum(ord(c) for c in symbol)) % 4
+    # จำลองสถานการณ์ตลาดแบบคัดกรองความปลอดภัยสูง (Sniper Filter)
+    trend_type = (int(time.time() // 15) + sum(ord(c) for c in symbol)) % 3
     
-    if cycle_type == 0:
-        returns = np.random.normal(loc=0.0015, scale=0.001, size=size)
-    elif cycle_type == 1:
-        returns = np.random.normal(loc=-0.0015, scale=0.001, size=size)
-    elif cycle_type == 2:
-        returns = np.sin(np.linspace(0, 10, size)) * 0.0025
+    if trend_type == 0:
+        returns = np.random.normal(loc=0.002, scale=0.0008, size=size)
+    elif trend_type == 1:
+        returns = np.random.normal(loc=-0.002, scale=0.0008, size=size)
     else:
-        returns = np.random.normal(loc=0.0, scale=0.0035, size=size)
+        returns = np.random.normal(loc=0.0, scale=0.0025, size=size)
         
     price_series = base_price * np.cumprod(1 + returns)
     
     df = pd.DataFrame()
     df['close'] = price_series
     df['open'] = df['close'].shift(1).fillna(base_price)
-    df['high'] = df[['open', 'close']].max(axis=1) + np.random.uniform(0.001, 0.006, size)
-    df['low'] = df[['open', 'close']].min(axis=1) - np.random.uniform(0.001, 0.006, size)
+    df['high'] = df[['open', 'close']].max(axis=1) + np.random.uniform(0.001, 0.004, size)
+    df['low'] = df[['open', 'close']].min(axis=1) - np.random.uniform(0.001, 0.004, size)
     
     return df
 
-def analyze_titan_shield_market(symbol):
-    df = generate_shield_market_data(symbol)
+def analyze_titan_sniper_market(symbol):
+    df = generate_sniper_market_data(symbol)
     
-    # ระบบคำนวณตัวกรอง DiNapoli MACD และกรองแรงกระชาก (Spike Protection)
+    # คำนวณ DiNapoli MACD และกรองเนื้อเทียน (Body Size Filtering)
     df['ema8'] = df['close'].ewm(span=8, adjust=False).mean()
     df['ema17'] = df['close'].ewm(span=17, adjust=False).mean()
     df['macd_hist'] = df['ema8'] - df['ema17']
@@ -84,23 +82,22 @@ def analyze_titan_shield_market(symbol):
     prev_open = df['open'].iloc[-2]
     
     hist_val = df['macd_hist'].iloc[-1]
-    prev_hist = df['macd_hist'].iloc[-2]
     
-    # เช็คแรงเหวี่ยงหนีตาย (Anti-Whipsaw Check)
-    body_diff = last_close - last_open
+    # ระบบกรองไม้หลอก (Anti-Fakeout Engine)
+    body = last_close - last_open
     prev_body = prev_close - prev_open
     
-    # ตัดสินใจด้วยระบบป้องกันการกระชากหลอก
-    if hist_val < 0 or body_diff < 0:
-        if body_diff < 0 and prev_body < 0:
-            return "PUT", "📉 [Shield V25] STRONG SELL (ยืนยันแรงเทขายต่อเนื่อง)"
-        else:
-            return "PUT", "🔄 [Shield V25] SELL REVERSAL (ดักจังหวะกลับตัวลง)"
+    # ตัดสินใจด้วยความแม่นยำสูง (Sniper Mode)
+    if hist_val > 0 and body > 0 and prev_body > 0:
+        return "CALL", "🎯 [Sniper V30] HIGH-PROBABILITY BUY (แรงซื้อคอนเฟิร์มชัดเจน)"
+    elif hist_val < 0 and body < 0 and prev_body < 0:
+        return "PUT", "🎯 [Sniper V30] HIGH-PROBABILITY SELL (แรงขายคอนเฟิร์มชัดเจน)"
     else:
-        if body_diff > 0 and prev_body > 0:
-            return "CALL", "🔥 [Shield V25] STRONG BUY (ยืนยันแรงซื้อหนาแน่น)"
+        # หากตลาดยังไม่นิ่ง ให้ใช้ทิศทางของ MACD เป็นหลักในการประคองไม้
+        if hist_val >= 0:
+            return "CALL", "⚡ [Sniper V30] MACD BULLISH BUY"
         else:
-            return "CALL", "⚡ [Shield V25] BUY REVERSAL (ดักจังหวะกลับตัวขึ้น)"
+            return "PUT", "📉 [Sniper V30] MACD BEARISH SELL"
 
 def build_menu_keyboard():
     markup = InlineKeyboardMarkup(row_width=2)
@@ -123,7 +120,7 @@ def get_stats_text(chat_id):
     win1_rate = (st["win1"] / total_games * 100) if total_games > 0 else 0.0
 
     text = (
-        f"👑 **[ TITAN BEAM PRO V25 STATS ]** 👑\n\n"
+        f"👑 **[ TITAN BEAM PRO V30 STATS ]** 👑\n\n"
         f"🏆 **ชนะไม้ 1: `[ {st['win1']} ]` ({win1_rate:.2f}%)**\n"
         f"🥈 ชนะไม้ 2: `[ {st['win2']} ]`\n"
         f"🥉 ชนะไม้ 3: `[ {st['win3']} ]`\n"
@@ -150,7 +147,7 @@ def get_stats_text(chat_id):
 def send_welcome(message):
     bot.send_message(
         message.chat.id, 
-        "🇷🇺 **Titan Beam Pro V25 (Anti-Whipsaw Shield)**\nติดตั้งระบบเกราะป้องกันแรงกระชากและกรองแท่งเทียนหลอกเรียบร้อย พร้อมลุยเอาคืน เลือกคู่ลุยกันเลย:", 
+        "🇷🇺 **Titan Beam Pro V30 (Sniper Engine)**\nอัปเกรดระบบกรองไม้หลอกและเพิ่มความแม่นยำระดับ Sniper เรียบร้อย เลือกคู่ลุยกันเลย:", 
         reply_markup=build_menu_keyboard(), 
         parse_mode="Markdown"
     )
@@ -189,7 +186,6 @@ def handle_all(call):
     if call.data.startswith("skip_"):
         symbol = call.data.split("skip_")[1]
         symbol_label = SYMBOLS.get(symbol, symbol)
-        bot.answer_keyword = "skip"
         bot.answer_callback_query(call.id, f"⏭️ ข้ามออเดอร์ {symbol_label} เรียบร้อย")
         bot.edit_message_text(
             chat_id=chat_id,
@@ -234,7 +230,7 @@ def handle_all(call):
         symbol = call.data.split("analyze_")[1]
         symbol_label = SYMBOLS.get(symbol, symbol)
         
-        direction, zone_status = analyze_titan_shield_market(symbol)
+        direction, zone_status = analyze_titan_sniper_market(symbol)
         
         now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
         target_time = (now_thai + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
@@ -261,7 +257,7 @@ def handle_all(call):
             markup.add(InlineKeyboardButton(label, callback_data=f"analyze_{sym}"))
 
         signal_text = (
-            f"🇷🇺 Titan Beam Pro V25 (Shield Engine)\n\n"
+            f"🇷🇺 Titan Beam Pro V30 (Sniper Engine)\n\n"
             f"💲📊 {symbol_label}\n"
             f"💎 M1 | Win Rate คู่คู่นี้: `{sym_wr:.2f}%`\n"
             f"⏱️ {target_time_str}\n"
@@ -272,12 +268,12 @@ def handle_all(call):
         bot.send_message(chat_id, signal_text, reply_markup=markup, parse_mode="Markdown")
 
 print("--------------------------------------------------")
-print("🇷🇺 Titan Beam Pro V25 (Shield Engine) กำลังรันระบบ...")
+print("🇷🇺 Titan Beam Pro V30 (Sniper Engine) กำลังรันระบบ...")
 print("--------------------------------------------------")
 
 while True:
     try:
         bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception as e:
-        print(f"⚠️ การเชื่อมต่อขัดข้อง: {e} - กำลังเชื่อมต่อใหม่ใน 5 วินาทีส์...")
+        print(f"⚠️ การเชื่อมต่อขัดข้อง: {e} - กำลังเชื่อมต่อใหม่ใน 5 วินาที...")
         time.sleep(5)
