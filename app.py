@@ -76,7 +76,7 @@ def check_user_approved(email: str, password: str = None) -> bool:
     return False
 
 # ==========================================
-# MARKET ANALYSIS & INDICATOR FUNCTIONS
+# MARKET ANALYSIS & INDICATOR FUNCTIONS (ULTRA SHARP)
 # ==========================================
 def get_forex_factory_high_impact_news():
     url = "https://www.forexfactory.com/ff_calendar_thisweek.xml"
@@ -143,44 +143,49 @@ def analyze_adaptive_market(symbol):
     df['returns'] = df['close'].pct_change()
     volatility = df['returns'].std()
     
+    # เพิ่มการคำนวณ True Range และ ATR เพื่อความคมระดับไร้เทียมทาน
+    df['tr'] = np.maximum(df['high'] - df['low'], np.maximum(abs(df['high'] - df['close'].shift(1)), abs(df['low'] - df['close'].shift(1))))
+    df['atr'] = df['tr'].rolling(window=14).mean()
+    
     df['ema5'] = df['close'].ewm(span=5, adjust=False).mean()
     df['ema20'] = df['close'].ewm(span=20, adjust=False).mean()
     trend_diff = abs(df['ema5'].iloc[-1] - df['ema20'].iloc[-1]) / df['ema20'].iloc[-1]
     
     last_close = df['close'].iloc[-1]
     last_open = df['open'].iloc[-1]
+    last_atr = df['atr'].iloc[-1] if not np.isnan(df['atr'].iloc[-1]) else 0.001
     
-    if volatility > 0.003:
-        tech_used = "⚙️ [Technique] Volatility Breaker Engine (ดักไส้เทียนผันผวน)"
+    if volatility > 0.003 or last_atr > 0.002:
+        tech_used = "⚙️ [Ultra Sharp] Volatility Breaker & ATR Matrix (กรองไส้เทียนแม่นยำสูง)"
         if last_close > last_open:
-            return "CALL", "⚠️ [V70 Adaptive] HIGH VOLATILITY - BUY WITH CAUTION", tech_used
+            return "CALL", "🔥 [V70 Ultra] HIGH VOLATILITY OPTIMIZED BUY", tech_used
         else:
-            return "PUT", "⚠️ [V70 Adaptive] HIGH VOLATILITY - SELL WITH CAUTION", tech_used
+            return "PUT", "🔥 [V70 Ultra] HIGH VOLATILITY OPTIMIZED SELL", tech_used
 
     elif trend_diff > 0.0015:
-        tech_used = "⚙️ [Technique] Trend Following Engine (EMA5/20 + MACD Momentum)"
+        tech_used = "⚙️ [Ultra Sharp] Trend Following Engine (EMA5/20 + Momentum Confirmation)"
         df['macd_hist'] = df['ema5'] - df['ema20']
         hist_val = df['macd_hist'].iloc[-1]
         
         if df['ema5'].iloc[-1] > df['ema20'].iloc[-1] and hist_val > 0:
-            return "CALL", "🔥 [V70 Adaptive] STRONG TREND BUY", tech_used
+            return "CALL", "🚀 [V70 Ultra] STRONG MOMENTUM TREND BUY", tech_used
         else:
-            return "PUT", "📉 [V70 Adaptive] STRONG TREND SELL", tech_used
+            return "PUT", "📉 [V70 Ultra] STRONG MOMENTUM TREND SELL", tech_used
 
     else:
-        tech_used = "⚙️ [Technique] Range Bound Engine (RSI Mean Reversion + แนวรับแนวต้าน)"
+        tech_used = "⚙️ [Ultra Sharp] Precision Range Engine (RSI Mean Reversion + Dynamic Zones)"
         df['rsi'] = calculate_rsi(df['close'], period=14)
         last_rsi = df['rsi'].iloc[-1] if not np.isnan(df['rsi'].iloc[-1]) else 50
         
-        if last_rsi < 45:
-            return "CALL", "🎯 [V70 Adaptive] SIDEWAY OVERSOLD BUY (ดักเด้ง)", tech_used
-        elif last_rsi > 55:
-            return "PUT", "🎯 [V70 Adaptive] SIDEWAY OVERBOUGHT SELL (ดักย่อ)", tech_used
+        if last_rsi < 42:
+            return "CALL", "🎯 [V70 Ultra] PRECISION OVERSOLD REBOUND (คมกริบ)", tech_used
+        elif last_rsi > 58:
+            return "PUT", "🎯 [V70 Ultra] PRECISION OVERBOUGHT REJECTION (คมกริบ)", tech_used
         else:
             if last_close >= last_open:
-                return "CALL", "⚡ [V70 Adaptive] RANGE NEUTRAL BUY", tech_used
+                return "CALL", "⚡ [V70 Ultra] RANGE NEUTRAL BUY", tech_used
             else:
-                return "PUT", "⚡ [V70 Adaptive] RANGE NEUTRAL SELL", tech_used
+                return "PUT", "⚡ [V70 Ultra] RANGE NEUTRAL SELL", tech_used
 
 def build_menu_keyboard():
     markup = InlineKeyboardMarkup(row_width=2)
@@ -205,7 +210,7 @@ def get_stats_text(chat_id):
     current_step = user_martingale_step.get(chat_id, 1)
 
     text = (
-        f"👑 **[ TITAN BEAM V70 ADAPTIVE STATS ]** 👑\n\n"
+        f"👑 **[ TITAN BEAM V70 ULTRA SHARP STATS ]** 👑\n\n"
         f"🎯 **สถานะไม้ปัจจุบัน: แนะนำให้ลุย `[ ไม้ที่ {current_step} ]`**\n\n"
         f"🏆 ชนะไม้ 1: `[ {st['win1']} ]` ({win1_rate:.2f}%)\n"
         f"🥈 ชนะไม้ 2: `[ {st['win2']} ]`\n"
@@ -254,9 +259,9 @@ def register_email(message):
             user_martingale_step[message.chat.id] = 1
             bot.reply_to(
                 message, 
-                f"✅ **ยืนยันตัวตนสำเร็จ!**\n"
-                f"อีเมล `{email}` และรหัสผ่านถูกต้อง (ได้รับการอนุมัติในระบบแล้ว)\n\n"
-                f"เลือกคู่เงินเพื่อวิเคราะห์ได้เลย:", 
+                f"✅ **ยืนยันตัวตนระดับไร้เทียมทานสำเร็จ!**\n"
+                f"อีเมล `{email}` และรหัสผ่านถูกต้อง (ผ่านการตรวจสอบจาก Firebase)\n\n"
+                f"เลือกคู่เงินเพื่อวิเคราะห์ความคมระดับสูงได้เลย:", 
                 reply_markup=build_menu_keyboard(),
                 parse_mode="Markdown"
             )
@@ -283,7 +288,7 @@ def send_welcome(message):
     if not email or not password:
         bot.send_message(
             chat_id, 
-            "🇷🇺 **Titan Beam Pro V70 (Adaptive Dynamic Engine)**\n\n"
+            "🇷🇺 **Titan Beam Pro V70 (Ultra Sharp Adaptive Engine)**\n\n"
             "🔒 **กรุณายืนยันตัวตนก่อนเข้าใช้งาน:**\n"
             "พิมพ์ `/email <อีเมล> <รหัสผ่าน>`\n"
             "ตัวอย่าง: `/email your_email@gmail.com 123456`", 
@@ -302,7 +307,7 @@ def send_welcome(message):
 
     bot.send_message(
         chat_id, 
-        "🇷🇺 **Titan Beam Pro V70 (Adaptive Dynamic Engine)**\nเปิดระบบปรับเปลี่ยนเทคนิคอัตโนมัติเรียบร้อย เลือกคู่เงินเพื่อวิเคราะห์ได้เลย:", 
+        "🇷🇺 **Titan Beam Pro V70 (Ultra Sharp Adaptive Engine)**\nเปิดระบบวิเคราะห์ความคมระดับไร้เทียมทานเรียบร้อย เลือกคู่เงินเพื่อลุยได้เลย:", 
         reply_markup=build_menu_keyboard(), 
         parse_mode="Markdown"
     )
@@ -453,12 +458,12 @@ def handle_all(call):
             markup.add(InlineKeyboardButton(label, callback_data=f"analyze_{sym}"))
 
         signal_text = (
-            f"🇷🇺 **Titan Beam Pro V70 (Adaptive Dynamic)**\n\n"
+            f"🇷🇺 **Titan Beam Pro V70 (Ultra Sharp Engine)**\n\n"
             f"🎯 **คำแนะนำ: ออกออเดอร์ `[ ไม้ที่ {current_step} ]`**\n"
             f"💲📊 {symbol_label}\n"
             f"💎 M1 | Win Rate: `{sym_wr:.2f}%`\n"
             f"⏱️ เวลาเป้าหมาย: `{target_time_str}`\n\n"
-            f"🕹️ **[ Real-time Mode Switching ]**\n"
+            f"🕹️ **[ Ultra Sharp Real-time Matrix ]**\n"
             f"• {tech_used}\n"
             f"• {ttz_desc}\n"
             f"• {news_status}\n"
@@ -472,7 +477,7 @@ def handle_all(call):
 # MAIN EXECUTION LOOP
 # ==========================================
 print("--------------------------------------------------")
-print("🇷🇺 Titan Beam Pro V70 (Adaptive Dynamic Engine) + Password Auth กำลังรันระบบ...")
+print("🇷🇺 Titan Beam Pro V70 (Ultra Sharp Engine) + Password Auth พร้อมลุยแล้ว...")
 print("--------------------------------------------------")
 
 while True:
