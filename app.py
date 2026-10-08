@@ -8,15 +8,18 @@ import requests
 import xml.etree.ElementTree as ET
 
 # ==========================================
-# API Token ของคุณ
+# API Token & Firebase Configuration
 # ==========================================
 BOT_TOKEN = "8822727043:AAEEKA96HNfVXO4CMYF7GxBTXq9q_uQhU4Y"
+FIREBASE_PROJECT_ID = "v70-user-auth"
+
 bot = telebot.TeleBot(BOT_TOKEN)
 
 INTERVAL = "1m"
 user_stats = {}
 symbol_stats = {}
 user_martingale_step = {}
+user_emails = {}  # ระบบเก็บอีเมลประจำ Chat ID ของผู้ใช้แต่ละคน
 
 SYMBOLS = {
     "DYDXUSDT": "📊 DYDX (OTC)",
@@ -46,6 +49,31 @@ SYMBOLS = {
     "XAGUSDT": "🥈 XAGUSD (OTC)"
 }
 
+# ==========================================
+# FIREBASE AUTH HELPER
+# ==========================================
+def check_user_approved(email: str) -> bool:
+    """ เช็คสถานะการอนุมัติของผู้ใช้จาก Firebase Firestore REST API """
+    if not email:
+        return False
+    
+    email = email.lower().strip()
+    url = f"https://firestore.googleapis.com/v1/projects/{FIREBASE_PROJECT_ID}/databases/(default)/documents/users/{email}"
+    
+    try:
+        res = requests.get(url, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            status = data.get("fields", {}).get("status", {}).get("stringValue", "")
+            return status == "approved"
+    except Exception as e:
+        print(f"⚠️ Firebase Error: {e}")
+        
+    return False
+
+# ==========================================
+# MARKET ANALYSIS & INDICATOR FUNCTIONS
+# ==========================================
 def get_forex_factory_high_impact_news():
     url = "https://www.forexfactory.com/ff_calendar_thisweek.xml"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -197,11 +225,66 @@ def get_stats_text(chat_id):
 
     return text + symbol_breakdown
 
+# ==========================================
+# TELEGRAM BOT HANDLERS WITH AUTH GATING
+# ==========================================
+@bot.message_handler(commands=['email'])
+def register_email(message):
+    try:
+        args = message.text.split()
+        if len(args) < 2:
+            bot.reply_to(message, "⚠️ กรุณาระบุอีเมล เช่น: `/email pasin23.a@gmail.com`", parse_mode="Markdown")
+            return
+        
+        email = args[1].lower().strip()
+        user_emails[message.chat.id] = email
+        
+        if check_user_approved(email):
+            user_martingale_step[message.chat.id] = 1
+            bot.reply_to(
+                message, 
+                f"✅ **ยืนยันสิทธิ์สำเร็จ!** อีเมล `{email}` ได้รับการอนุมัติในระบบ Firebase แล้ว\n\nเลือกคู่เงินเพื่อวิเคราะห์ได้เลย:", 
+                reply_markup=build_menu_keyboard(),
+                parse_mode="Markdown"
+            )
+        else:
+            bot.reply_to(
+                message, 
+                f"🟡 บันทึกอีเมล `{email}` เรียบร้อยแล้ว แต่สถานะในระบบ Firebase ยังไม่ได้รับการอนุมัติ (`status` ไม่ใช่ `approved`)\n"
+                f"กรุณาติดต่อ Admin เพื่ออนุมัติสิทธิ์ใช้งาน", 
+                parse_mode="Markdown"
+            )
+    except Exception as e:
+        bot.reply_to(message, f"❌ เกิดข้อผิดพลาด: {e}")
+
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    user_martingale_step[message.chat.id] = 1
+    chat_id = message.chat.id
+    user_martingale_step[chat_id] = 1
+    email = user_emails.get(chat_id, "")
+
+    if not email:
+        bot.send_message(
+            chat_id, 
+            "🇷🇺 **Titan Beam Pro V70 (Adaptive Dynamic Engine)**\n\n"
+            "🔒 **กรุณายืนยันตัวตนก่อนเข้าใช้งาน:**\n"
+            "พิมพ์ `/email ตามด้วยอีเมลของคุณ`\n"
+            "ตัวอย่าง: `/email pasin23.a@gmail.com`", 
+            parse_mode="Markdown"
+        )
+        return
+
+    if not check_user_approved(email):
+        bot.send_message(
+            chat_id,
+            f"❌ **ปฏิเสธการเข้าถึง:** อีเมล `{email}` ยังไม่ได้รับการอนุมัติใช้งานในระบบ Firebase (`v70-user-auth`)\n"
+            "กรุณาติดต่อ Admin เพื่อขออนุมัติสิทธิ์",
+            parse_mode="Markdown"
+        )
+        return
+
     bot.send_message(
-        message.chat.id, 
+        chat_id, 
         "🇷🇺 **Titan Beam Pro V70 (Adaptive Dynamic Engine)**\nเปิดระบบปรับเปลี่ยนเทคนิคอัตโนมัติเรียบร้อย เลือกคู่เงินเพื่อวิเคราะห์ได้เลย:", 
         reply_markup=build_menu_keyboard(), 
         parse_mode="Markdown"
@@ -209,11 +292,21 @@ def send_welcome(message):
 
 @bot.message_handler(commands=['stats'])
 def show_stats(message):
-    bot.send_message(message.chat.id, get_stats_text(message.chat.id), parse_mode="Markdown")
+    chat_id = message.chat.id
+    email = user_emails.get(chat_id, "")
+    if not check_user_approved(email):
+        bot.send_message(chat_id, "❌ คุณไม่มีสิทธิ์เข้าถึงข้อมูลสถิติ กรุณาระบุอีเมลที่ได้รับอนุมัติผ่าน `/email`", parse_mode="Markdown")
+        return
+    bot.send_message(chat_id, get_stats_text(chat_id), parse_mode="Markdown")
 
 @bot.message_handler(commands=['reset'])
 def reset_stats(message):
     chat_id = message.chat.id
+    email = user_emails.get(chat_id, "")
+    if not check_user_approved(email):
+        bot.send_message(chat_id, "❌ คุณไม่มีสิทธิ์ใช้งานคำสั่งนี้", parse_mode="Markdown")
+        return
+    
     user_stats[chat_id] = {"win1": 0, "win2": 0, "win3": 0, "loss": 0}
     symbol_stats[chat_id] = {}
     user_martingale_step[chat_id] = 1
@@ -222,6 +315,18 @@ def reset_stats(message):
 @bot.callback_query_handler(func=lambda call: True)
 def handle_all(call):
     chat_id = call.message.chat.id
+    email = user_emails.get(chat_id, "")
+
+    # 🔒 เช็คสิทธิ์จาก Firebase ทุกครั้งเมื่อมีคนคลิกปุ่ม
+    if not check_user_approved(email):
+        bot.answer_callback_query(call.id, "❌ คุณยังไม่ได้รับการอนุมัติสิทธิ์ใช้งาน!", show_alert=True)
+        bot.send_message(
+            chat_id,
+            "⛔ **สิทธิ์ใช้งานถูกระงับ:** อีเมลของคุณยังไม่อยู่ในสถานะ `approved` ในระบบ Firebase\n"
+            "พิมพ์ `/email ตามด้วยอีเมลที่อนุมัติ` หรือติดต่อ Admin"
+        )
+        return
+
     if chat_id not in user_stats:
         user_stats[chat_id] = {"win1": 0, "win2": 0, "win3": 0, "loss": 0}
     if chat_id not in symbol_stats:
@@ -338,8 +443,11 @@ def handle_all(call):
 
         bot.send_message(chat_id, signal_text, reply_markup=markup, parse_mode="Markdown")
 
+# ==========================================
+# MAIN EXECUTION LOOP
+# ==========================================
 print("--------------------------------------------------")
-print("🇷🇺 Titan Beam Pro V70 (Adaptive Dynamic Engine) กำลังรันระบบ...")
+print("🇷🇺 Titan Beam Pro V70 (Adaptive Dynamic Engine) + Firebase Auth กำลังรันระบบ...")
 print("--------------------------------------------------")
 
 while True:
