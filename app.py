@@ -19,7 +19,7 @@ INTERVAL = "1m"
 user_stats = {}
 symbol_stats = {}
 user_martingale_step = {}
-user_emails = {}  # ระบบเก็บอีเมลประจำ Chat ID ของผู้ใช้แต่ละคน
+user_creds = {}  # เก็บอีเมลและรหัสผ่านประจำ Chat ID
 
 SYMBOLS = {
     "DYDXUSDT": "📊 DYDX (OTC)",
@@ -50,11 +50,11 @@ SYMBOLS = {
 }
 
 # ==========================================
-# FIREBASE AUTH HELPER
+# FIREBASE AUTH HELPER (EMAIL + PASSWORD)
 # ==========================================
-def check_user_approved(email: str) -> bool:
-    """ เช็คสถานะการอนุมัติของผู้ใช้จาก Firebase Firestore REST API """
-    if not email:
+def check_user_approved(email: str, password: str = None) -> bool:
+    """ เช็คสถานะการอนุมัติและรหัสผ่านของผู้ใช้จาก Firebase Firestore REST API """
+    if not email or not password:
         return False
     
     email = email.lower().strip()
@@ -64,8 +64,12 @@ def check_user_approved(email: str) -> bool:
         res = requests.get(url, timeout=5)
         if res.status_code == 200:
             data = res.json()
-            status = data.get("fields", {}).get("status", {}).get("stringValue", "")
-            return status == "approved"
+            fields = data.get("fields", {})
+            status = fields.get("status", {}).get("stringValue", "")
+            db_password = fields.get("password", {}).get("stringValue", "")
+            
+            # ตรวจสอบทั้งสถานะอนุมัติ (approved) และรหัสผ่านที่ตรงกัน
+            return (status == "approved") and (str(db_password) == str(password))
     except Exception as e:
         print(f"⚠️ Firebase Error: {e}")
         
@@ -226,32 +230,43 @@ def get_stats_text(chat_id):
     return text + symbol_breakdown
 
 # ==========================================
-# TELEGRAM BOT HANDLERS WITH AUTH GATING
+# TELEGRAM BOT HANDLERS WITH PASSWORD AUTH
 # ==========================================
 @bot.message_handler(commands=['email'])
 def register_email(message):
     try:
         args = message.text.split()
-        if len(args) < 2:
-            bot.reply_to(message, "⚠️ กรุณาระบุอีเมล เช่น: `/email pasin23.a@gmail.com`", parse_mode="Markdown")
+        if len(args) < 3:
+            bot.reply_to(
+                message, 
+                "⚠️ **กรุณาระบุอีเมลและรหัสผ่านให้ครบถ้วน**\n\n"
+                "👉 รูปแบบ: `/email <อีเมล> <รหัสผ่าน>`\n"
+                "ตัวอย่าง: `/email your_email@gmail.com 123456`", 
+                parse_mode="Markdown"
+            )
             return
         
         email = args[1].lower().strip()
-        user_emails[message.chat.id] = email
+        password = args[2].strip()
         
-        if check_user_approved(email):
+        if check_user_approved(email, password):
+            user_creds[message.chat.id] = {"email": email, "password": password}
             user_martingale_step[message.chat.id] = 1
             bot.reply_to(
                 message, 
-                f"✅ **ยืนยันสิทธิ์สำเร็จ!** อีเมล `{email}` ได้รับการอนุมัติในระบบ Firebase แล้ว\n\nเลือกคู่เงินเพื่อวิเคราะห์ได้เลย:", 
+                f"✅ **ยืนยันตัวตนสำเร็จ!**\n"
+                f"อีเมล `{email}` และรหัสผ่านถูกต้อง (ได้รับการอนุมัติในระบบแล้ว)\n\n"
+                f"เลือกคู่เงินเพื่อวิเคราะห์ได้เลย:", 
                 reply_markup=build_menu_keyboard(),
                 parse_mode="Markdown"
             )
         else:
             bot.reply_to(
                 message, 
-                f"🟡 บันทึกอีเมล `{email}` เรียบร้อยแล้ว แต่สถานะในระบบ Firebase ยังไม่ได้รับการอนุมัติ (`status` ไม่ใช่ `approved`)\n"
-                f"กรุณาติดต่อ Admin เพื่ออนุมัติสิทธิ์ใช้งาน", 
+                f"❌ **เข้าสู่ระบบไม่สำเร็จ:**\n"
+                f"• อีเมลหรือรหัสผ่านไม่ถูกต้อง หรือ\n"
+                f"• บัญชีของคุณยังไม่ได้รับการอนุมัติ (`status` ไม่ใช่ `approved`)\n\n"
+                f"กรุณาตรวจสอบข้อมูล หรือติดต่อ Admin", 
                 parse_mode="Markdown"
             )
     except Exception as e:
@@ -261,24 +276,26 @@ def register_email(message):
 def send_welcome(message):
     chat_id = message.chat.id
     user_martingale_step[chat_id] = 1
-    email = user_emails.get(chat_id, "")
+    creds = user_creds.get(chat_id, {})
+    email = creds.get("email", "")
+    password = creds.get("password", "")
 
-    if not email:
+    if not email or not password:
         bot.send_message(
             chat_id, 
             "🇷🇺 **Titan Beam Pro V70 (Adaptive Dynamic Engine)**\n\n"
             "🔒 **กรุณายืนยันตัวตนก่อนเข้าใช้งาน:**\n"
-            "พิมพ์ `/email ตามด้วยอีเมลของคุณ`\n"
-            "ตัวอย่าง: `/email pasin23.a@gmail.com`", 
+            "พิมพ์ `/email <อีเมล> <รหัสผ่าน>`\n"
+            "ตัวอย่าง: `/email your_email@gmail.com 123456`", 
             parse_mode="Markdown"
         )
         return
 
-    if not check_user_approved(email):
+    if not check_user_approved(email, password):
         bot.send_message(
             chat_id,
-            f"❌ **ปฏิเสธการเข้าถึง:** อีเมล `{email}` ยังไม่ได้รับการอนุมัติใช้งานในระบบ Firebase (`v70-user-auth`)\n"
-            "กรุณาติดต่อ Admin เพื่อขออนุมัติสิทธิ์",
+            f"❌ **ปฏิเสธการเข้าถึง:** ข้อมูลเข้าสู่ระบบไม่ถูกต้อง หรือสิทธิ์ถูกระงับในระบบ Firebase (`v70-user-auth`)\n"
+            "พิมพ์ `/email <อีเมล> <รหัสผ่าน>` ใหม่ หรือติดต่อ Admin",
             parse_mode="Markdown"
         )
         return
@@ -293,17 +310,23 @@ def send_welcome(message):
 @bot.message_handler(commands=['stats'])
 def show_stats(message):
     chat_id = message.chat.id
-    email = user_emails.get(chat_id, "")
-    if not check_user_approved(email):
-        bot.send_message(chat_id, "❌ คุณไม่มีสิทธิ์เข้าถึงข้อมูลสถิติ กรุณาระบุอีเมลที่ได้รับอนุมัติผ่าน `/email`", parse_mode="Markdown")
+    creds = user_creds.get(chat_id, {})
+    email = creds.get("email", "")
+    password = creds.get("password", "")
+
+    if not email or not password or not check_user_approved(email, password):
+        bot.send_message(chat_id, "❌ คุณไม่มีสิทธิ์เข้าถึงข้อมูลสถิติ กรุณายืนยันตัวตนผ่าน `/email <อีเมล> <รหัสผ่าน>`", parse_mode="Markdown")
         return
     bot.send_message(chat_id, get_stats_text(chat_id), parse_mode="Markdown")
 
 @bot.message_handler(commands=['reset'])
 def reset_stats(message):
     chat_id = message.chat.id
-    email = user_emails.get(chat_id, "")
-    if not check_user_approved(email):
+    creds = user_creds.get(chat_id, {})
+    email = creds.get("email", "")
+    password = creds.get("password", "")
+
+    if not email or not password or not check_user_approved(email, password):
         bot.send_message(chat_id, "❌ คุณไม่มีสิทธิ์ใช้งานคำสั่งนี้", parse_mode="Markdown")
         return
     
@@ -315,15 +338,17 @@ def reset_stats(message):
 @bot.callback_query_handler(func=lambda call: True)
 def handle_all(call):
     chat_id = call.message.chat.id
-    email = user_emails.get(chat_id, "")
+    creds = user_creds.get(chat_id, {})
+    email = creds.get("email", "")
+    password = creds.get("password", "")
 
     # 🔒 เช็คสิทธิ์จาก Firebase ทุกครั้งเมื่อมีคนคลิกปุ่ม
-    if not check_user_approved(email):
-        bot.answer_callback_query(call.id, "❌ คุณยังไม่ได้รับการอนุมัติสิทธิ์ใช้งาน!", show_alert=True)
+    if not email or not password or not check_user_approved(email, password):
+        bot.answer_callback_query(call.id, "❌ คุณยังไม่ได้ยืนยันตัวตนหรือสิทธิ์ถูกระงับ!", show_alert=True)
         bot.send_message(
             chat_id,
-            "⛔ **สิทธิ์ใช้งานถูกระงับ:** อีเมลของคุณยังไม่อยู่ในสถานะ `approved` ในระบบ Firebase\n"
-            "พิมพ์ `/email ตามด้วยอีเมลที่อนุมัติ` หรือติดต่อ Admin"
+            "⛔ **สิทธิ์ใช้งานถูกระงับหรือข้อมูลไม่ถูกต้อง:**\n"
+            "พิมพ์ `/email <อีเมล> <รหัสผ่าน>` เพื่อยืนยันตัวตนใหม่ หรือติดต่อ Admin"
         )
         return
 
@@ -447,7 +472,7 @@ def handle_all(call):
 # MAIN EXECUTION LOOP
 # ==========================================
 print("--------------------------------------------------")
-print("🇷🇺 Titan Beam Pro V70 (Adaptive Dynamic Engine) + Firebase Auth กำลังรันระบบ...")
+print("🇷🇺 Titan Beam Pro V70 (Adaptive Dynamic Engine) + Password Auth กำลังรันระบบ...")
 print("--------------------------------------------------")
 
 while True:
