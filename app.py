@@ -76,7 +76,7 @@ def check_user_approved(email: str, password: str = None) -> bool:
     return False
 
 # ==========================================
-# MARKET ANALYSIS & INDICATOR FUNCTIONS (ULTRA SHARP)
+# MARKET ANALYSIS & S&R FILTER FUNCTIONS
 # ==========================================
 def get_forex_factory_high_impact_news():
     url = "https://www.forexfactory.com/ff_calendar_thisweek.xml"
@@ -137,15 +137,33 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
+def check_support_resistance_zones(df):
+    """
+    ระบบตรวจจับแนวรับแนวต้าน (Support & Resistance Filter)
+    คำนวณจาก Swing High และ Swing Low ย้อนหลัง เพื่อป้องกันการโดนแนวต้าน/แนวรับดีดสวน
+    """
+    recent_high = df['high'].tail(20).max()
+    recent_low = df['low'].tail(20).min()
+    current_price = df['close'].iloc[-1]
+    
+    # คำนวณระยะห่างจากแนวต้านและแนวรับ (หน่วยเป็นเปอร์เซ็นต์)
+    dist_to_resistance = abs(recent_high - current_price) / current_price
+    dist_to_support = abs(current_price - recent_low) / current_price
+    
+    # ถ้าราชอยู่ชิดแนวต้านหรือแนวรับในระยะ < 0.15% แปลว่าเสี่ยงโดนดีดกลับ
+    threshold = 0.0015
+    if dist_to_resistance < threshold:
+        return "NEAR_RESISTANCE", f"🛡️ [S&R Filter] ราคาชิดแนวต้านสำคัญ ({recent_high:.2f}) ระวังแรงขายดีดกลับ!"
+    elif dist_to_support < threshold:
+        return "NEAR_SUPPORT", f"🛡️ [S&R Filter] ราคาชิดแนวรับสำคัญ ({recent_low:.2f}) ระวังแรงซื้อดีดกลับ!"
+    
+    return "CLEAR", "🛡️ [S&R Filter] โซนปลอดภัย ไม่ติดแนวรับ/แนวต้านหนาแน่น"
+
 def analyze_adaptive_market(symbol):
     df = generate_adaptive_market_data(symbol)
     
     df['returns'] = df['close'].pct_change()
     volatility = df['returns'].std()
-    
-    # เพิ่มการคำนวณ True Range และ ATR เพื่อความคมระดับไร้เทียมทาน
-    df['tr'] = np.maximum(df['high'] - df['low'], np.maximum(abs(df['high'] - df['close'].shift(1)), abs(df['low'] - df['close'].shift(1))))
-    df['atr'] = df['tr'].rolling(window=14).mean()
     
     df['ema5'] = df['close'].ewm(span=5, adjust=False).mean()
     df['ema20'] = df['close'].ewm(span=20, adjust=False).mean()
@@ -153,39 +171,46 @@ def analyze_adaptive_market(symbol):
     
     last_close = df['close'].iloc[-1]
     last_open = df['open'].iloc[-1]
-    last_atr = df['atr'].iloc[-1] if not np.isnan(df['atr'].iloc[-1]) else 0.001
     
-    if volatility > 0.003 or last_atr > 0.002:
-        tech_used = "⚙️ [Ultra Sharp] Volatility Breaker & ATR Matrix (กรองไส้เทียนแม่นยำสูง)"
-        if last_close > last_open:
-            return "CALL", "🔥 [V70 Ultra] HIGH VOLATILITY OPTIMIZED BUY", tech_used
-        else:
-            return "PUT", "🔥 [V70 Ultra] HIGH VOLATILITY OPTIMIZED SELL", tech_used
-
+    # เช็คสถานะแนวรับแนวต้าน
+    sr_status, sr_desc = check_support_resistance_zones(df)
+    
+    # วิเคราะห์ทิศทางพื้นฐานตาม Engine
+    if volatility > 0.003:
+        tech_used = "⚙️ [Technique] Volatility Breaker Engine (ดักไส้เทียนผันผวน)"
+        base_dir = "CALL" if last_close > last_open else "PUT"
+        status_msg = "⚠️ [V70 S&R Secured] HIGH VOLATILITY - CAUTION"
     elif trend_diff > 0.0015:
-        tech_used = "⚙️ [Ultra Sharp] Trend Following Engine (EMA5/20 + Momentum Confirmation)"
+        tech_used = "⚙️ [Technique] Trend Following Engine (EMA5/20 + MACD Momentum)"
         df['macd_hist'] = df['ema5'] - df['ema20']
         hist_val = df['macd_hist'].iloc[-1]
-        
-        if df['ema5'].iloc[-1] > df['ema20'].iloc[-1] and hist_val > 0:
-            return "CALL", "🚀 [V70 Ultra] STRONG MOMENTUM TREND BUY", tech_used
-        else:
-            return "PUT", "📉 [V70 Ultra] STRONG MOMENTUM TREND SELL", tech_used
-
+        base_dir = "CALL" if (df['ema5'].iloc[-1] > df['ema20'].iloc[-1] and hist_val > 0) else "PUT"
+        status_msg = "🔥 [V70 S&R Secured] STRONG TREND SIGNAL"
     else:
-        tech_used = "⚙️ [Ultra Sharp] Precision Range Engine (RSI Mean Reversion + Dynamic Zones)"
+        tech_used = "⚙️ [Technique] Range Bound Engine (RSI Mean Reversion + S&R Guard)"
         df['rsi'] = calculate_rsi(df['close'], period=14)
         last_rsi = df['rsi'].iloc[-1] if not np.isnan(df['rsi'].iloc[-1]) else 50
         
-        if last_rsi < 42:
-            return "CALL", "🎯 [V70 Ultra] PRECISION OVERSOLD REBOUND (คมกริบ)", tech_used
-        elif last_rsi > 58:
-            return "PUT", "🎯 [V70 Ultra] PRECISION OVERBOUGHT REJECTION (คมกริบ)", tech_used
+        if last_rsi < 45:
+            base_dir = "CALL"
+            status_msg = "🎯 [V70 S&R Secured] OVERSOLD BUY (ดักเด้ง)"
+        elif last_rsi > 55:
+            base_dir = "PUT"
+            status_msg = "🎯 [V70 S&R Secured] OVERBOUGHT SELL (ดักย่อ)"
         else:
-            if last_close >= last_open:
-                return "CALL", "⚡ [V70 Ultra] RANGE NEUTRAL BUY", tech_used
-            else:
-                return "PUT", "⚡ [V70 Ultra] RANGE NEUTRAL SELL", tech_used
+            base_dir = "CALL" if last_close >= last_open else "PUT"
+            status_msg = "⚡ [V70 S&R Secured] RANGE NEUTRAL SIGNAL"
+
+    # ระบบกรองไม้ด้วย S&R Filter ป้องกันการโดนดีดสวนทาง (กลับตัวอัตโนมัติหากชนแนวแข็งแกร่ง)
+    final_dir = base_dir
+    if sr_status == "NEAR_RESISTANCE" and base_dir == "CALL":
+        final_dir = "PUT"  # ชนแนวต้านแต่ออก Call -> สลับเป็น Put ดักพักตัวทันที
+        status_msg = "🔄 [S&R Counter-Rejection] ชนแนวต้าน! สลับสวนทางดักแท่งกลับตัว"
+    elif sr_status == "NEAR_SUPPORT" and base_dir == "PUT":
+        final_dir = "CALL" # ชนแนวรับแต่ออก Put -> สลับเป็น Call ดักเด้งกลับทันที
+        status_msg = "🔄 [S&R Counter-Rejection] ชนแนวรับ! สลับสวนทางดักแท่งดีดตัว"
+
+    return final_dir, status_msg, tech_used, sr_desc
 
 def build_menu_keyboard():
     markup = InlineKeyboardMarkup(row_width=2)
@@ -210,7 +235,7 @@ def get_stats_text(chat_id):
     current_step = user_martingale_step.get(chat_id, 1)
 
     text = (
-        f"👑 **[ TITAN BEAM V70 ULTRA SHARP STATS ]** 👑\n\n"
+        f"👑 **[ TITAN BEAM V70 S&R GUARD STATS ]** 👑\n\n"
         f"🎯 **สถานะไม้ปัจจุบัน: แนะนำให้ลุย `[ ไม้ที่ {current_step} ]`**\n\n"
         f"🏆 ชนะไม้ 1: `[ {st['win1']} ]` ({win1_rate:.2f}%)\n"
         f"🥈 ชนะไม้ 2: `[ {st['win2']} ]`\n"
@@ -259,9 +284,9 @@ def register_email(message):
             user_martingale_step[message.chat.id] = 1
             bot.reply_to(
                 message, 
-                f"✅ **ยืนยันตัวตนระดับไร้เทียมทานสำเร็จ!**\n"
-                f"อีเมล `{email}` และรหัสผ่านถูกต้อง (ผ่านการตรวจสอบจาก Firebase)\n\n"
-                f"เลือกคู่เงินเพื่อวิเคราะห์ความคมระดับสูงได้เลย:", 
+                f"✅ **ยืนยันตัวตนสำเร็จ!**\n"
+                f"อีเมล `{email}` และรหัสผ่านถูกต้อง พร้อมระบบกรองแนวรับ-แนวต้าน (S&R Guard)\n\n"
+                f"เลือกคู่เงินเพื่อวิเคราะห์ได้เลย:", 
                 reply_markup=build_menu_keyboard(),
                 parse_mode="Markdown"
             )
@@ -288,7 +313,7 @@ def send_welcome(message):
     if not email or not password:
         bot.send_message(
             chat_id, 
-            "🇷🇺 **Titan Beam Pro V70 (Ultra Sharp Adaptive Engine)**\n\n"
+            "🇷🇺 **Titan Beam Pro V70 (S&R Guard Edition)**\n\n"
             "🔒 **กรุณายืนยันตัวตนก่อนเข้าใช้งาน:**\n"
             "พิมพ์ `/email <อีเมล> <รหัสผ่าน>`\n"
             "ตัวอย่าง: `/email your_email@gmail.com 123456`", 
@@ -307,7 +332,7 @@ def send_welcome(message):
 
     bot.send_message(
         chat_id, 
-        "🇷🇺 **Titan Beam Pro V70 (Ultra Sharp Adaptive Engine)**\nเปิดระบบวิเคราะห์ความคมระดับไร้เทียมทานเรียบร้อย เลือกคู่เงินเพื่อลุยได้เลย:", 
+        "🇷🇺 **Titan Beam Pro V70 (S&R Guard Edition)**\nเปิดระบบตรวจจับเส้นแนวรับ-แนวต้านป้องกันการดีดกลับเรียบร้อย เลือกคู่เงินเพื่อลุยได้เลย:", 
         reply_markup=build_menu_keyboard(), 
         parse_mode="Markdown"
     )
@@ -430,7 +455,7 @@ def handle_all(call):
         ff_news = get_forex_factory_high_impact_news()
         news_status = f"🌐 Forex Factory: พบข่าวกล่องแดงวันนี้ {len(ff_news)} รายการ" if ff_news else "🌐 Forex Factory: ไร้ข่าวแดงรุนแรงในขณะนี้"
 
-        direction, zone_status, tech_used = analyze_adaptive_market(symbol)
+        direction, zone_status, tech_used, sr_desc = analyze_adaptive_market(symbol)
         current_step = user_martingale_step.get(chat_id, 1)
         
         now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
@@ -458,13 +483,14 @@ def handle_all(call):
             markup.add(InlineKeyboardButton(label, callback_data=f"analyze_{sym}"))
 
         signal_text = (
-            f"🇷🇺 **Titan Beam Pro V70 (Ultra Sharp Engine)**\n\n"
+            f"🇷🇺 **Titan Beam Pro V70 (S&R Guard Edition)**\n\n"
             f"🎯 **คำแนะนำ: ออกออเดอร์ `[ ไม้ที่ {current_step} ]`**\n"
             f"💲📊 {symbol_label}\n"
             f"💎 M1 | Win Rate: `{sym_wr:.2f}%`\n"
             f"⏱️ เวลาเป้าหมาย: `{target_time_str}`\n\n"
-            f"🕹️ **[ Ultra Sharp Real-time Matrix ]**\n"
+            f"🕹️ **[ S&R Matrix & Adaptive Engine ]**\n"
             f"• {tech_used}\n"
+            f"• {sr_desc}\n"
             f"• {ttz_desc}\n"
             f"• {news_status}\n"
             f"• {zone_status}\n\n"
@@ -477,7 +503,7 @@ def handle_all(call):
 # MAIN EXECUTION LOOP
 # ==========================================
 print("--------------------------------------------------")
-print("🇷🇺 Titan Beam Pro V70 (Ultra Sharp Engine) + Password Auth พร้อมลุยแล้ว...")
+print("🇷🇺 Titan Beam Pro V70 (S&R Guard Edition) พร้อมลุยแล้ว...")
 print("--------------------------------------------------")
 
 while True:
