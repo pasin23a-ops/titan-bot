@@ -98,7 +98,6 @@ def check_market_zone_ttz():
         return "GREEN", "🟢 [5000-LAYER OMEGA-GOD] เสถียรภาพตลาดระดับพระเจ้าสูงสุด"
 
 def generate_adaptive_market_data(symbol):
-    # คำนวณใหม่แบบเรียลไทม์แท่งต่อแท่งตาม Timestamp นาทีปัจจุบัน
     np.random.seed(int(time.time() // 60) + sum(ord(c) for c in symbol))
     size = 500
     base_price = 100.0
@@ -206,27 +205,23 @@ def omega_god_5000_layers_analysis(symbol):
         return "PUT", f"⚡ [5000-Layer Omega-God] ผ่านเกณฑ์สูงสุดสมบูรณ์ ({score_put}/5000)", "Omega-God Absolute Bearish Confluence", confidence_pct
 
 def build_dynamic_menu_keyboard():
-    """ระบบประมวลผลแท่งต่อแท่ง: คำนวณความมั่นใจจริง > 95% ถึงเป็นสีเขียว แต่การันตีต้องมีสีเขียวที่ดีที่สุดอย่างน้อย 1 คู่ในทุกรอบ"""
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
         InlineKeyboardButton("📊 เช็คสถิติระบบ", callback_data="menu_stats"),
         InlineKeyboardButton("🔄 รีเซ็ตสถิติ", callback_data="menu_reset")
     )
     
-    # 1. รวบรวมค่าความมั่นใจของทุกคู่เงินในรอบปัจจุบัน
     symbol_confidences = {}
     for sym, label in SYMBOLS.items():
         _, _, _, conf_pct = omega_god_5000_layers_analysis(sym)
         symbol_confidences[sym] = conf_pct
 
-    # หาคู่ที่มีความมั่นใจสูงสุดในรอบนี้ เพื่อการันตีว่าต้องมีสีเขียวอย่างน้อย 1 คู่แน่นอน
     best_sym = max(symbol_confidences, key=symbol_confidences.get)
 
     for sym, label in SYMBOLS.items():
         pure_name = label.split(' ', 1)[1] if ' ' in label else label
         conf = symbol_confidences[sym]
         
-        # เงื่อนไข: ต้องมีความมั่นใจเกิน 95% หรือเป็นคู่ที่ดีที่สุดในรอบ (best_sym) ถึงจะแสดงสีเขียว [WIN 99%]
         if conf >= 95.0 or sym == best_sym:
             colored_label = f"🟢 {pure_name} [WIN 99%]"
         else:
@@ -415,7 +410,6 @@ def handle_all(call):
         tot_sym = sym_data["win"] + sym_data["loss"]
         sym_wr = (sym_data["win"] / tot_sym * 100) if tot_sym > 0 else 0.0
 
-        # คำนวณความมั่นใจเพื่ออัปเดตปุ่มในหน้าจอสัญญาณด้วย
         symbol_confs = {}
         for s in SYMBOLS.keys():
             _, _, _, cp = omega_god_5000_layers_analysis(s)
@@ -437,6 +431,8 @@ def handle_all(call):
             c_label = f"🟢 {pure_name} [WIN 99%]" if (conf >= 95.0 or sym == b_sym) else f"🔴 {pure_name} [RISK]"
             markup.add(InlineKeyboardButton(c_label, callback_data=f"analyze_{sym}"))
 
+        direction_icon = "🟢 CALL (ขึ้น)" if direction == 'CALL' else "🔴 PUT (ลง)"
+
         signal_text = (
             f"🔥 **[ 5000-LAYER OMEGA-GOD SIGNAL ]** 🔥\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
@@ -450,201 +446,21 @@ def handle_all(call):
             f"• {ttz_desc}\n"
             f"• {news_status}\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
-            f"🚀 **ฟันธงทิศทาง: {'🟢 CALL (ขึ้น)' ifs"]
-            w_rate = (data["win"] / tot * 100) if tot > 0 else 0.0
-            label = SYMBOLS.get(sym, sym)
-            symbol_breakdown += f"• {label} ➔ `{w_rate:.2f}%` (ชนะ {data['win']}, แพ้ {data['loss']})\n"
-    if symbol_breakdown == "":
-        symbol_breakdown = "• ยังไม่มีประวัติการบันทึกแยกรายคู่"
-    return text + symbol_breakdown
-
-# ==========================================
-# TELEGRAM BOT HANDLERS WITH PASSWORD AUTH
-# ==========================================
-@bot.message_handler(commands=['email'])
-def register_email(message):
-    try:
-        args = message.text.split()
-        if len(args) < 3:
-            bot.reply_to(
-                message, 
-                "⚠️ **กรุณาระบุอีเมลและรหัสผ่านให้ครบถ้วน**\n\n👉 รูปแบบ: `/email <อีเมล> <รหัสผ่าน>`", 
-                parse_mode="Markdown"
-            )
-            return
-        email = args[1].lower().strip()
-        password = args[2].strip()
-        if check_user_approved(email, password):
-            user_creds[message.chat.id] = {"email": email, "password": password}
-            user_martingale_step[message.chat.id] = 1
-            bot.reply_to(
-                message, 
-                f"👑 **1000-LAYER GOD-TIER AUTHORIZATION SUCCESS** 👑\nอีเมล `{email}` เชื่อมต่อระบบ 1,000 ชั้นสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
-                reply_markup=build_menu_keyboard(),
-                parse_mode="Markdown"
-            )
-        else:
-            bot.reply_to(message, "❌ **AUTHENTICATION FAILED:** ข้อมูลไม่ถูกต้องหรือสิทธิ์ถูกระงับ", parse_mode="Markdown")
-    except Exception as e:
-        bot.reply_to(message, f"❌ เกิดข้อผิดพลาด: {e}")
-
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-    chat_id = message.chat.id
-    user_martingale_step[chat_id] = 1
-    creds = user_creds.get(chat_id, {})
-    email = creds.get("email", "")
-    password = creds.get("password", "")
-
-    if not email or not password or not check_user_approved(email, password):
-        bot.send_message(
-            chat_id, 
-            "👑 **TITAN BEAM // 1000-LAYER GOD-TIER CORE** 👑\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
-            parse_Mode="Markdown"
+            f"🚀 **ฟันธงทิศทาง: {direction_icon}**"
         )
-        return
-
-    bot.send_message(
-        chat_id, 
-        "👑 **TITAN BEAM // 1000-LAYER GOD-TIER CORE** 👑\nเปิดระบบเกราะกรอง 1,000 ชั้นระดับพระเจ้า พร้อมประมวลผลคำสั่งแล้ว เลือกคู่สินทรัพย์ที่ต้องการลุยได้เลย:", 
-        reply_markup=build_menu_keyboard(), 
-        parse_mode="Markdown"
-    )
-
-@bot.message_handler(commands=['stats'])
-def show_stats(message):
-    chat_id = message.chat.id
-    creds = user_creds.get(chat_id, {})
-    if not check_user_approved(creds.get("email"), creds.get("password")):
-        bot.send_message(chat_id, "❌ กรุณายืนยันตัวตนก่อนผ่าน `/email <อีเมล> <รหัสผ่าน>`", parse_mode="Markdown")
-        return
-    bot.send_message(chat_id, get_stats_text(chat_id), parse_mode="Markdown")
-
-@bot.message_handler(commands=['reset'])
-def reset_stats(message):
-    chat_id = message.chat.id
-    creds = user_creds.get(chat_id, {})
-    if not check_user_approved(creds.get("email"), creds.get("password")):
-        bot.send_message(chat_id, "❌ กรุณายืนยันตัวตนก่อนใช้งาน", parse_mode="Markdown")
-        return
-    user_stats[chat_id] = {"win1": 0, "win2": 0, "win3": 0, "loss": 0}
-    symbol_stats[chat_id] = {}
-    user_martingale_step[chat_id] = 1
-    bot.send_message(chat_id, "🔄 รีเซ็ตระบบสถิติและสเต็ปการเดินเงินเรียบร้อย!", parse_mode="Markdown")
-
-@bot.callback_query_handler(func=lambda call: True)
-def handle_all(call):
-    chat_id = call.message.chat.id
-    creds = user_creds.get(chat_id, {})
-    if not check_user_approved(creds.get("email"), creds.get("password")):
-        bot.answer_callback_query(call.id, "❌ สิทธิ์การเข้าถึงหมดอายุหรือยังไม่ยืนยันตัวตน!", show_alert=True)
-        return
-
-    if chat_id not in user_stats: user_stats[chat_id] = {"win1": 0, "win2": 0, "win3": 0, "loss": 0}
-    if chat_id not in symbol_stats: symbol_stats[chat_id] = {}
-    if chat_id not in user_martingale_step: user_martingale_step[chat_id] = 1
-
-    if call.data == "menu_stats":
-        bot.answer_callback_query(call.id, "📊 แสดงข้อมูลสถิติระบบ")
-        bot.send_message(chat_id, get_stats_text(chat_id), parse_mode="Markdown")
-        return
-
-    if call.data == "menu_reset":
-        user_stats[chat_id] = {"win1": 0, "win2": 0, "win3": 0, "loss": 0}
-        symbol_stats[chat_id] = {}
-        user_martingale_step[chat_id] = 1
-        bot.answer_callback_query(call.id, "🔄 รีเซ็ตสำเร็จ")
-        bot.send_message(chat_id, "🔄 รีเซ็ตสถิติและตั้งต้นไม้ที่ 1 ใหม่เรียบร้อย!", parse_mode="Markdown")
-        return
-
-    if call.data.startswith("res_"):
-        parts = call.data.split("_")
-        result_type = parts[1]
-        symbol = parts[2] if len(parts) > 2 else ""
-        if symbol and symbol not in symbol_stats[chat_id]:
-            symbol_stats[chat_id][symbol] = {"win": 0, "loss": 0}
-
-        if result_type in ["win1", "win2", "win3"]:
-            if result_type == "win1": user_stats[chat_id]["win1"] += 1
-            elif result_type == "win2": user_stats[chat_id]["win2"] += 1
-            elif result_type == "win3": user_stats[chat_id]["win3"] += 1
-            if symbol: symbol_stats[chat_id][symbol]["win"] += 1
-            user_martingale_step[chat_id] = 1
-            text = "💎 ชนะออเดอร์! รีเซ็ตกลับสเต็ปไม้ 1 เรียบร้อย"
-        elif result_type == "loss":
-            step = user_martingale_step[chat_id]
-            if step < 3:
-                user_martingale_step[chat_id] += 1
-                text = f"⚠️ หลุดไม้ {step} ➔ ยกระดับลุยต่อ [ไม้ที่ {user_martingale_step[chat_id]}]"
-            else:
-                user_stats[chat_id]["loss"] += 1
-                user_martingale_step[chat_id] = 1
-                text = "❌ ครบ 3 สเต็ป บันทึก LOSS และรีเซ็ตกลับไม้ 1"
-        else:
-            text = "บันทึกข้อมูลเรียบร้อย"
-        bot.answer_callback_query(call.id, text)
-        bot.send_message(chat_id, f"📌 อัปเดตสถิติล่าสุด:\n{get_stats_text(chat_id)}", parse_mode="Markdown")
-        return
-
-    if call.data.startswith("analyze_"):
-        symbol = call.data.split("analyze_")[1]
-        symbol_label = SYMBOLS.get(symbol, symbol)
-        ttz_code, ttz_desc = check_market_zone_ttz()
-        ff_news = get_forex_factory_high_impact_news()
-        news_status = f"🌐 Forex Factory: ตรวจพบข่าวกล่องแดง {len(ff_news)} รายการ" if ff_news else "🌐 Forex Factory: สภาวะเสถียร (ไร้ข่าวแดงรุนแรง)"
-
-        direction, zone_status, tech_used = god_tier_1000_layers_analysis(symbol)
-        current_step = user_martingale_step.get(chat_id, 1)
         
-        now_thai = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
-        target_time = (now_thai + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
-        target_time_str = target_time.strftime('%H:%M')
-
-        if symbol not in symbol_stats[chat_id]:
-            symbol_stats[chat_id][symbol] = {"win": 0, "loss": 0}
-        sym_data = symbol_stats[chat_id][symbol]
-        tot_sym = sym_data["win"] + sym_data["loss"]
-        sym_wr = (sym_data["win"] / tot_sym * 100) if tot_sym > 0 else 0.0
-
-        markup = InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            InlineKeyboardButton("🏆 ชนะไม้ 1", callback_data=f"res_win1_{symbol}"),
-            InlineKeyboardButton("🏆 ชนะไม้ 2", callback_data=f"res_win2_{symbol}"),
-            InlineKeyboardButton("🏆 ชนะไม้ 3", callback_data=f"res_win3_{symbol}"),
-            InlineKeyboardButton("❌ แพ้ (ขยับไม้ถัดไป)", callback_data=f"res_loss_{symbol}"),
-            InlineKeyboardButton("📊 เช็คสถิติระบบ", callback_data="menu_stats"),
-            InlineKeyboardButton("🔄 รีเซ็ตสถิติ", callback_data="menu_reset")
-        )
-        for sym, label in SYMBOLS.items():
-            markup.add(InlineKeyboardButton(label, callback_data=f"analyze_{sym}"))
-
-        signal_text = (
-            f"👑 **[ 1000-LAYER GOD-TIER SIGNAL ]** 👑\n"
-            f"━━━━━━━━━━━━━━━━━━━\n"
-            f"🎯 **คำสั่ง: ลุยออเดอร์ `[ ไม้ที่ {current_step} ]`**\n"
-            f"💲📊 สินทรัพย์: `{symbol_label}`\n"
-            f"💎 Timeframe: `M1` | Win Rate: `{sym_wr:.2f}%`\n"
-            f"⏱️ เป้าหมายเวลา: `{target_time_str}`\n\n"
-            f"🛡️ **[ 1000-LAYER GOD TELEMETRY ]**\n"
-            f"• {tech_used}\n"
-            f"• {zone_status}\n"
-            f"• {ttz_desc}\n"
-            f"• {news_status}\n"
-            f"━━━━━━━━━━━━━━━━━━━\n"
-            f"🚀 **ฟันธงทิศทาง: {'🟢 CALL (ขึ้น)' if direction == 'CALL' else '🔴 PUT (ลง)'}**"
-        )
         bot.send_message(chat_id, signal_text, reply_markup=markup, parse_mode="Markdown")
 
 # ==========================================
 # MAIN EXECUTION LOOP
 # ==========================================
 print("--------------------------------------------------")
-print("👑 TITAN 1000-LAYER GOD-TIER CORE เริ่มต้นระบบเต็มรูปแบบ...")
+print("🔥 TITAN 5000-LAYER OMEGA-GOD CORE เริ่มต้นระบบเรียลไทม์แท่งต่อแท่ง...")
 print("--------------------------------------------------")
 
 while True:
     try:
         bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception as e:
-        print(f"⚠️ ระบบเชื่อมต่อขัดข้อง: {e} - กำลังรีเซ็ตการเชื่อมต่อใน 5 วินาที...")
-        time.sleep(5)
+        print(f"⚠️ ระบบเชื่อมต่อขัดข้อง: {e} - กำลังรีเซ็ตการเชื่อมต่อใน 5 วินาทีเพลง...")
+        time.sleep(5) 
