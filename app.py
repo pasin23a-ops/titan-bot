@@ -103,7 +103,7 @@ def check_market_zone_ttz():
 
 def generate_adaptive_market_data(symbol):
     np.random.seed(int(time.time() // 1) + sum(ord(c) for c in symbol))
-    size = 200
+    size = 300  # ขยายขนาดข้อมูลให้เพียงพอสำหรับค่า EMA ระยะไกล
     base_price = 100.0
     regime = (int(time.time() // 2) + sum(ord(c) for c in symbol)) % 3
     if regime == 0:
@@ -128,17 +128,12 @@ def calculate_rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 def omega_500_layers_matrix_analysis(symbol):
-    """
-    ระบบประมวลผล 500 ชั้นขั้นสูงสุด (500-Layer Omega Neural Hyper-Core)
-    ครอบคลุมตัวกรองตรรกะเชิงลึก 500 เลเยอร์ ทำงานอัตโนมัติเต็มรูปแบบ 100%
-    """
     df = generate_adaptive_market_data(symbol)
     
-    # เลเยอร์ที่ 1-50: Hyper-EMA Confluence Matrix
-    for span_val in [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 18, 21, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100, 120, 150, 200]:
+    # สร้าง EMA ครบถ้วนและปลอดภัยไร้ Error
+    for span_val in [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 18, 21, 25, 30, 35, 40, 45, 50, 55, 60, 70, 80, 90, 100, 120, 150, 200]:
         df[f'ema_{span_val}'] = df['close'].ewm(span=span_val, adjust=False).mean()
         
-    # เลเยอร์ที่ 51-150: Multi-Timeframe MACD, DiNapoli & Momentum Oscillators
     d_fast = df['close'].ewm(span=17, adjust=False).mean()
     d_slow = df['close'].ewm(span=8, adjust=False).mean()
     df['dinapoli_hist'] = d_fast - d_slow
@@ -149,12 +144,8 @@ def omega_500_layers_matrix_analysis(symbol):
     df['macd_signal'] = df['macd_line'].ewm(span=4, adjust=False).mean()
     df['std_hist'] = df['macd_line'] - df['macd_signal']
     
-    # เลเยอร์ที่ 151-300: Volatility, RVI, RSI & Hyper-Velocity Vectors
     df['rvi'] = calculate_rsi(df['close'], 14)
-    df['rsi_fast'] = calculate_rsi(df['close'], 5)
-    df['rolling_std'] = df['close'].rolling(window=10).std()
     
-    # เลเยอร์ที่ 301-400: Absolute Support & Resistance / Order Block Shields
     recent_high = df['high'].tail(50).max()
     recent_low = df['low'].tail(50).min()
     current_price = df['close'].iloc[-1]
@@ -162,7 +153,6 @@ def omega_500_layers_matrix_analysis(symbol):
     dist_res = abs(recent_high - current_price) / current_price
     dist_sup = abs(current_price - recent_low) / current_price
     
-    # เลเยอร์ที่ 401-500: Deep Price Action & Omega Confluence Scoring
     last_close = df['close'].iloc[-1]
     last_open = df['open'].iloc[-1]
     prev_close = df['close'].iloc[-2]
@@ -171,13 +161,11 @@ def omega_500_layers_matrix_analysis(symbol):
     omega_call_score = 0
     omega_put_score = 0
     
-    # ระบบป้องกันและล้างบางแรงดีด/แรงทุบอัตโนมัติ (Omega Anti-Rejection Shield)
     if dist_res < 0.0003:
         return "PUT", "🛡️ [500-Layer Omega] ชนแนวต้านเหล็กกล้า ➔ ระบบ Omega สั่งดัก PUT ทันที", "Omega S&R Resistance Rejection Matrix"
     if dist_sup < 0.0003:
         return "CALL", "🛡️ [500-Layer Omega] ชนแนวรับเหล็กกล้า ➔ ระบบ Omega สั่งดัก CALL ทันที", "Omega S&R Support Rejection Matrix"
 
-    # ประเมินแต้มผ่าน 500 เลเยอร์อัตโนมัติ
     if df['ema_2'].iloc[-1] > df['ema_8'].iloc[-1]: omega_call_score += 50
     else: omega_put_score += 50
     
@@ -202,7 +190,6 @@ def omega_500_layers_matrix_analysis(symbol):
     if prev_close > prev_open: omega_call_score += 50
     else: omega_put_score += 50
 
-    # ฟันธงผลลัพธ์แบบเด็ดขาด 500 เลเยอร์ Omega Core
     if omega_call_score >= omega_put_score:
         return "CALL", f"⚡ [500-Layer Omega Core] ประมวลผลผ่านเกราะสมบูรณ์ ({omega_call_score}/500)", "Omega Hyper Bullish Confluence"
     else:
@@ -388,7 +375,7 @@ def handle_all(call):
         direction, zone_status, tech_used = omega_500_layers_matrix_analysis(symbol)
         current_step = user_martingale_step.get(chat_id, 1)
         
-        now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
+        now_thai = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
         target_time = (now_thai + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
         target_time_str = target_time.strftime('%H:%M')
 
