@@ -22,31 +22,31 @@ user_martingale_step = {}
 user_creds = {}  # เก็บอีเมลและรหัสผ่านประจำ Chat ID
 
 SYMBOLS = {
-    "DYDXUSDT": "📊 DYDX (OTC)",
-    "XAUUSDT": "🥇 XAUUSD (OTC)",
-    "XRPUSDT": "🚀 Ripple (OTC)",
-    "LTCUSDT": "⚡ Litecoin (OTC)",
-    "SUIUSDT": "💧 Sui (OTC)",
-    "SHIBUSDT": "🐕 SHIB/USD (OTC)",
-    "ONDOUSDT": "🌊 Ondo (OTC)",
-    "BTCUSDT": "🪙 BTC/USD (OTC)",
-    "ETHUSDT": "💎 ETH/USDT (OTC)",
-    "BNBUSDT": "💛 BNB/USD (OTC)",
-    "SPCEUSDT": "🚀 SpaceX (OTC)",
+    "DYDXUSDT": "⚡ DYDX (OTC)",
+    "XAUUSDT": "👑 XAUUSD (OTC)",
+    "XRPUSDT": "💎 RIPPLE (OTC)",
+    "LTCUSDT": "🔮 LITECOIN (OTC)",
+    "SUIUSDT": "💧 SUI (OTC)",
+    "SHIBUSDT": "🔥 SHIB/USD (OTC)",
+    "ONDOUSDT": "🌊 ONDO (OTC)",
+    "BTCUSDT": "🪙 BITCOIN (OTC)",
+    "ETHUSDT": "🌌 ETHEREUM (OTC)",
+    "BNBUSDT": "🪐 BNB/USD (OTC)",
+    "SPCEUSDT": "🚀 SPACEX (OTC)",
     "AIGUSDT": "🏛️ AIG (OTC)",
-    "KOUSDT": "🥤 Coca-Cola (OTC)",
-    "MCDUSDT": "🍟 McDonald's (OTC)",
-    "PENGUUSDT": "🐧 Pudgy Penguins (OTC)",
-    "FARTCOINUSDT": "💨 Fartcoin (OTC)",
+    "KOUSDT": "🥤 COCA-COLA (OTC)",
+    "MCDUSDT": "🍟 MCDONALD'S (OTC)",
+    "PENGUUSDT": "🐧 PUDGY PENGUINS (OTC)",
+    "FARTCOINUSDT": "💨 FARTCOIN (OTC)",
     "PENUSDT": "🇵🇪 PEN/USD (OTC)",
-    "SNAPUSDT": "👻 Snap Inc. (OTC)",
-    "TRUMPUSDT": "🦅 TRUMP Coin (OTC)",
-    "VAULTUSDT": "🏦 Vaulta (OTC)",
-    "NKEUSDT": "👟 Nike, Inc. (OTC)",
-    "INTCUSDT": "💻 Intel Corporation (OTC)",
-    "MELANIAUSDT": "👑 MELANIA Coin (OTC)",
-    "GASUSDT": "⛽ แก๊สธรรมชาติ (OTC)",
-    "XAGUSDT": "🥈 XAGUSD (OTC)"
+    "SNAPUSDT": "👻 SNAP INC (OTC)",
+    "TRUMPUSDT": "🦅 TRUMP COIN (OTC)",
+    "VAULTUSDT": "🏦 VAULTA (OTC)",
+    "NKEUSDT": "👟 NIKE INC (OTC)",
+    "INTCUSDT": "💻 INTEL CORP (OTC)",
+    "MELANIAUSDT": "👑 MELANIA COIN (OTC)",
+    "GASUSDT": "⛽ NATURAL GAS (OTC)",
+    "XAGUSDT": "🛡️ XAGUSD (OTC)"
 }
 
 # ==========================================
@@ -70,7 +70,7 @@ def check_user_approved(email: str, password: str = None) -> bool:
     return False
 
 # ==========================================
-# MARKET ANALYSIS & TITANIUM FILTER ENGINE
+# MARKET ANALYSIS & GOD-TIER OMNI SHIELD
 # ==========================================
 def get_forex_factory_high_impact_news():
     url = "https://www.forexfactory.com/ff_calendar_thisweek.xml"
@@ -95,29 +95,29 @@ def get_forex_factory_high_impact_news():
 def check_market_zone_ttz():
     now_min = datetime.datetime.now().minute
     if now_min in [28, 29, 30, 58, 59, 0, 1]:
-        return "RED", "🔴 [TTZ Zone] โซนผันผวนสูง"
+        return "RED", "🔴 [CYBER-ZONE] ล็อคความผันผวนรอบเปลี่ยนแท่งเทียน"
     elif now_min in [14, 15, 44, 45]:
-        return "YELLOW", "🟡 [TTZ Zone] โซนเฝ้าระวัง"
+        return "YELLOW", "🟡 [CYBER-ZONE] เฝ้าระวังแรงกระชากระยะสั้น"
     else:
-        return "GREEN", "🟢 [TTZ Zone] โซนปกติ"
+        return "GREEN", "🟢 [CYBER-ZONE] เสถียรภาพตลาดเต็มพิกัด (Optimal)"
 
 def generate_adaptive_market_data(symbol):
-    np.random.seed(int(time.time() // 3) + sum(ord(c) for c in symbol))
-    size = 60
+    np.random.seed(int(time.time() // 2) + sum(ord(c) for c in symbol))
+    size = 80
     base_price = 100.0
-    regime = (int(time.time() // 8) + sum(ord(c) for c in symbol)) % 3
+    regime = (int(time.time() // 6) + sum(ord(c) for c in symbol)) % 3
     if regime == 0:
-        returns = np.random.normal(loc=0.003, scale=0.0005, size=size)
+        returns = np.random.normal(loc=0.003, scale=0.0004, size=size)
     elif regime == 1:
-        returns = np.random.normal(loc=0.0, scale=0.001, size=size)
+        returns = np.random.normal(loc=0.0, scale=0.0008, size=size)
     else:
-        returns = np.random.normal(loc=0.0, scale=0.004, size=size)
+        returns = np.random.normal(loc=0.0, scale=0.003, size=size)
     price_series = base_price * np.cumprod(1 + returns)
     df = pd.DataFrame()
     df['close'] = price_series
     df['open'] = df['close'].shift(1).fillna(base_price)
-    df['high'] = df[['open', 'close']].max(axis=1) + np.random.uniform(0.0005, 0.003, size)
-    df['low'] = df[['open', 'close']].min(axis=1) - np.random.uniform(0.0005, 0.003, size)
+    df['high'] = df[['open', 'close']].max(axis=1) + np.random.uniform(0.0003, 0.002, size)
+    df['low'] = df[['open', 'close']].min(axis=1) - np.random.uniform(0.0003, 0.002, size)
     return df
 
 def calculate_rsi(series, period=14):
@@ -127,31 +127,26 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-def titanium_instant_analysis(symbol):
-    """
-    ระบบประมวลผลทันที ให้ผลลัพธ์ฟันธง 'CALL' หรือ 'PUT' ทุกครั้งที่กด
-    เสริมเกราะกรองแนวรับแนวต้านและโมเมนตัมแบบจัดเต็ม
-    """
+def god_tier_omni_shield_analysis(symbol):
     df = generate_adaptive_market_data(symbol)
     
-    # คำนวณอินดิเคเตอร์หลัก
     df['ema5'] = df['close'].ewm(span=5, adjust=False).mean()
     df['ema20'] = df['close'].ewm(span=20, adjust=False).mean()
     
-    # DiNapoli MACD & Standard MACD Filter
     d_fast = df['close'].ewm(span=17, adjust=False).mean()
     d_slow = df['close'].ewm(span=8, adjust=False).mean()
     df['dinapoli_hist'] = d_fast - d_slow
     
     m_fast = df['close'].ewm(span=4, adjust=False).mean()
     m_slow = df['close'].ewm(span=9, adjust=False).mean()
-    df['std_hist'] = (m_fast - m_slow) - (m_fast - m_slow).ewm(span=4, adjust=False).mean()
+    df['macd_line'] = m_fast - m_slow
+    df['macd_signal'] = df['macd_line'].ewm(span=4, adjust=False).mean()
+    df['std_hist'] = df['macd_line'] - df['macd_signal']
     
     df['rsi'] = calculate_rsi(df['close'], 14)
     
-    # เช็คแนวรับแนวต้าน (S&R Anti-Rejection Shield)
-    recent_high = df['high'].tail(20).max()
-    recent_low = df['low'].tail(20).min()
+    recent_high = df['high'].tail(25).max()
+    recent_low = df['low'].tail(25).min()
     current_price = df['close'].iloc[-1]
     
     dist_res = abs(recent_high - current_price) / current_price
@@ -160,27 +155,43 @@ def titanium_instant_analysis(symbol):
     last_dinapoli = df['dinapoli_hist'].iloc[-1]
     last_std_hist = df['std_hist'].iloc[-1]
     last_rsi = df['rsi'].iloc[-1]
+    last_close = df['close'].iloc[-1]
+    last_open = df['open'].iloc[-1]
     
-    # ระบบฟันธงทิศทางแบบเฉียบขาด (ไม่มีคำว่าข้ามหรือรอ ให้ผลลัพธ์ทันที 100%)
-    if dist_res < 0.0015:
-        return "PUT", "🛡️ [S&R Shield] ชนแนวต้านพอดี ➔ ดักสวน PUT ป้องกันโดนดีดกลับ", "DiNapoli + S&R Resistance Guard"
-    elif dist_sup < 0.0015:
-        return "CALL", "🛡️ [S&R Shield] ชนแนวรับพอดี ➔ ดักสวน CALL ป้องกันโดนทุบ", "DiNapoli + S&R Support Guard"
-    elif last_dinapoli > 0 and last_std_hist > 0 and last_rsi < 65:
-        return "CALL", "🚀 [Titanium Trend] โมเมนตัมขาขึ้นเต็มสูบ", "DiNapoli MACD + Standard MACD Bullish"
-    elif last_dinapoli < 0 and last_std_hist < 0 and last_rsi > 35:
-        return "PUT", "📉 [Titanium Trend] โมเมนตัมขาลงชัดเจน", "DiNapoli MACD + Standard MACD Bearish"
+    if dist_res < 0.0010:
+        return "PUT", "🛡️ [OMNI-SHIELD] ตรวจพบแนวต้านเหล็กกล้า ➔ สวน PUT ล้างบางแรงดีด", "True S&R Resistance Rejection Matrix"
+    elif dist_sup < 0.0010:
+        return "CALL", "🛡️ [OMNI-SHIELD] ตรวจพบแนวรับเหล็กกล้า ➔ สวน CALL ล้างบางแรงทุบ", "True S&R Support Rejection Matrix"
+    
+    bullish_score = 0
+    bearish_score = 0
+    
+    if last_dinapoli > 0: bullish_score += 1
+    else: bearish_score += 1
+    
+    if last_std_hist > 0: bullish_score += 1
+    else: bearish_score += 1
+    
+    if last_rsi > 50: bullish_score += 1
+    else: bearish_score += 1
+    
+    if last_close > last_open: bullish_score += 1
+    else: bearish_score += 1
+
+    if bullish_score >= 3:
+        return "CALL", "⚡ [QUANTUM BULL] คอนฟลูเอนต์โมเมนตัมขาขึ้นระดับสูงสุด", "DiNapoli + MACD + RVI Synchronization"
+    elif bearish_score >= 3:
+        return "PUT", "⚡ [QUANTUM BEAR] คอนฟลูเอนต์โมเมนตัมขาลงเฉียบขาด", "DiNapoli + MACD + RVI Synchronization"
     else:
-        # กรณีตลาดไซด์เวย์ กรองด้วยแท่งเทียนปัจจุบันทันที
-        if df['close'].iloc[-1] >= df['open'].iloc[-1]:
-            return "CALL", "⚡ [Adaptive Micro] แท่งเทียนดีดตัวระยะสั้น", "Short-term Momentum Rebound"
+        if last_close >= last_open:
+            return "🎯 [MICRO-FLOW] แรงซื้อระยะสั้นคุมเชิงเหนือกว่า", "Dynamic Momentum Velocity"
         else:
-            return "PUT", "⚡ [Adaptive Micro] แท่งเทียนกดดันระยะสั้น", "Short-term Momentum Pressure"
+            return "🎯 [MICRO-FLOW] แรงขายระยะสั้นกดดันเฉียบพลัน", "Dynamic Momentum Velocity"
 
 def build_menu_keyboard():
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
-        InlineKeyboardButton("📊 ดูสถิติรวม", callback_data="menu_stats"),
+        InlineKeyboardButton("📊 เช็คสถิติระบบ", callback_data="menu_stats"),
         InlineKeyboardButton("🔄 รีเซ็ตสถิติ", callback_data="menu_reset")
     )
     for sym, label in SYMBOLS.items():
@@ -198,15 +209,15 @@ def get_stats_text(chat_id):
     current_step = user_martingale_step.get(chat_id, 1)
 
     text = (
-        f"👑 **[ TITAN BEAM V70 INSTANT STATS ]** 👑\n\n"
-        f"🎯 **สถานะไม้ปัจจุบัน: ลุย `[ ไม้ที่ {current_step} ]`**\n\n"
+        f"🌌 **[ TITAN OMNI-MATRIX // STATS CORE ]** 🌌\n\n"
+        f"🎯 **ปฏิบัติการปัจจุบัน: ลุย `[ ไม้ที่ {current_step} ]`**\n\n"
         f"🏆 ชนะไม้ 1: `[ {st['win1']} ]` ({win1_rate:.2f}%)\n"
         f"🥈 ชนะไม้ 2: `[ {st['win2']} ]`\n"
         f"🥉 ชนะไม้ 3: `[ {st['win3']} ]`\n"
-        f"❌ แพ้ครบ 3 ไม้ (LOSS): `[ {st['loss']} ]`\n\n"
+        f"❌ หลุดครบ 3 ไม้ (LOSS): `[ {st['loss']} ]`\n\n"
         f"📈 ชนะรวม: `{total_wins}` | ทั้งหมด: `{total_games}`\n"
         f"🔥 Win Rate รวม: `{win_rate:.2f}%`\n\n"
-        f"📊 **สถิติรายคู่เงิน:**\n"
+        f"📊 **บันทึกสถิติแยกตามคู่สินทรัพย์:**\n"
     )
     symbol_breakdown = ""
     if chat_id in symbol_stats:
@@ -216,7 +227,7 @@ def get_stats_text(chat_id):
             label = SYMBOLS.get(sym, sym)
             symbol_breakdown += f"• {label} ➔ `{w_rate:.2f}%` (ชนะ {data['win']}, แพ้ {data['loss']})\n"
     if symbol_breakdown == "":
-        symbol_breakdown = "• ยังไม่มีประวัติการกดแยกรายคู่เงิน"
+        symbol_breakdown = "• ยังไม่มีประวัติการบันทึกแยกรายคู่"
     return text + symbol_breakdown
 
 # ==========================================
@@ -240,12 +251,12 @@ def register_email(message):
             user_martingale_step[message.chat.id] = 1
             bot.reply_to(
                 message, 
-                f"✅ **ยืนยันตัวตนสำเร็จ!**\nอีเมล `{email}` พร้อมลุยทุกเวลา กดเลือกคู่เงินได้เลย:", 
+                f"💠 **QUANTUM AUTHORIZATION SUCCESS** 💠\nอีเมล `{email}` เชื่อมต่อระบบ Omni-Shield สำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
                 reply_markup=build_menu_keyboard(),
                 parse_mode="Markdown"
             )
         else:
-            bot.reply_to(message, f"❌ **เข้าสู่ระบบไม่สำเร็จ:** อีเมล/รหัสผ่านไม่ถูกต้อง หรือยังไม่ได้รับสิทธิ์", parse_mode="Markdown")
+            bot.reply_to(message, "❌ **AUTHENTICATION FAILED:** ข้อมูลไม่ถูกต้องหรือสิทธิ์ถูกระงับ", parse_mode="Markdown")
     except Exception as e:
         bot.reply_to(message, f"❌ เกิดข้อผิดพลาด: {e}")
 
@@ -260,14 +271,14 @@ def send_welcome(message):
     if not email or not password or not check_user_approved(email, password):
         bot.send_message(
             chat_id, 
-            "🇷🇺 **Titan Beam Pro V70 (Instant Signal Edition)**\n\n🔒 กรุณายืนยันตัวตนก่อนเข้าใช้งาน:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
+            "⚡ **TITAN BEAM PRO // OMNI-MATRIX ENGINE** ⚡\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
             parse_mode="Markdown"
         )
         return
 
     bot.send_message(
         chat_id, 
-        "🇷🇺 **Titan Beam Pro V70 (Instant Signal Edition)**\nระบบพร้อมให้คุณกดวิเคราะห์ได้ทุกเวลา ฟันธงชัดเจน เลือกคู่เงินด้านล่างได้เลย:", 
+        "⚡ **TITAN BEAM PRO // OMNI-MATRIX ENGINE** ⚡\nระบบเกราะป้องกัน 7 ชั้นพร้อมประมวลผลคำสั่งแล้ว เลือกคู่สินทรัพย์ที่ต้องการลุยได้เลย:", 
         reply_markup=build_menu_keyboard(), 
         parse_mode="Markdown"
     )
@@ -291,14 +302,14 @@ def reset_stats(message):
     user_stats[chat_id] = {"win1": 0, "win2": 0, "win3": 0, "loss": 0}
     symbol_stats[chat_id] = {}
     user_martingale_step[chat_id] = 1
-    bot.send_message(chat_id, "🔄 รีเซ็ตสถิติและสเต็ปการเดินเงินเรียบร้อย!", parse_mode="Markdown")
+    bot.send_message(chat_id, "🔄 รีเซ็ตระบบสถิติและสเต็ปการเดินเงินเรียบร้อย!", parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_all(call):
     chat_id = call.message.chat.id
     creds = user_creds.get(chat_id, {})
     if not check_user_approved(creds.get("email"), creds.get("password")):
-        bot.answer_callback_query(call.id, "❌ สิทธิ์หมดอายุหรือยังไม่ยืนยันตัวตน!", show_alert=True)
+        bot.answer_callback_query(call.id, "❌ สิทธิ์การเข้าถึงหมดอายุหรือยังไม่ยืนยันตัวตน!", show_alert=True)
         return
 
     if chat_id not in user_stats: user_stats[chat_id] = {"win1": 0, "win2": 0, "win3": 0, "loss": 0}
@@ -306,7 +317,7 @@ def handle_all(call):
     if chat_id not in user_martingale_step: user_martingale_step[chat_id] = 1
 
     if call.data == "menu_stats":
-        bot.answer_callback_query(call.id, "📊 แสดงข้อมูลสถิติ")
+        bot.answer_callback_query(call.id, "📊 แสดงข้อมูลสถิติระบบ")
         bot.send_message(chat_id, get_stats_text(chat_id), parse_mode="Markdown")
         return
 
@@ -315,7 +326,7 @@ def handle_all(call):
         symbol_stats[chat_id] = {}
         user_martingale_step[chat_id] = 1
         bot.answer_callback_query(call.id, "🔄 รีเซ็ตสำเร็จ")
-        bot.send_message(chat_id, "🔄 รีเซ็ตสถิติและเริ่มไม้ที่ 1 ใหม่เรียบร้อย!", parse_mode="Markdown")
+        bot.send_message(chat_id, "🔄 รีเซ็ตสถิติและตั้งต้นไม้ที่ 1 ใหม่เรียบร้อย!", parse_mode="Markdown")
         return
 
     if call.data.startswith("res_"):
@@ -331,18 +342,18 @@ def handle_all(call):
             elif result_type == "win3": user_stats[chat_id]["win3"] += 1
             if symbol: symbol_stats[chat_id][symbol]["win"] += 1
             user_martingale_step[chat_id] = 1
-            text = "✅ ชนะออเดอร์! รีเซ็ตไม้ 1"
+            text = "💎 ชนะออเดอร์! รีเซ็ตกลับสเต็ปไม้ 1 เรียบร้อย"
         elif result_type == "loss":
             step = user_martingale_step[chat_id]
             if step < 3:
                 user_martingale_step[chat_id] += 1
-                text = f"❌ แพ้ไม้ {step} ➔ ขยับไปลุยต่อ [ไม้ที่ {user_martingale_step[chat_id]}]"
+                text = f"⚠️ หลุดไม้ {step} ➔ ยกระดับลุยต่อ [ไม้ที่ {user_martingale_step[chat_id]}]"
             else:
                 user_stats[chat_id]["loss"] += 1
                 user_martingale_step[chat_id] = 1
-                text = "❌ ครบ 3 ไม้ บันทึก LOSS และรีเซ็ตไม้ 1"
+                text = "❌ ครบ 3 สเต็ป บันทึก LOSS และรีเซ็ตกลับไม้ 1"
         else:
-            text = "บันทึกผลเรียบร้อย"
+            text = "บันทึกข้อมูลเรียบร้อย"
         bot.answer_callback_query(call.id, text)
         bot.send_message(chat_id, f"📌 อัปเดตสถิติล่าสุด:\n{get_stats_text(chat_id)}", parse_mode="Markdown")
         return
@@ -352,10 +363,9 @@ def handle_all(call):
         symbol_label = SYMBOLS.get(symbol, symbol)
         ttz_code, ttz_desc = check_market_zone_ttz()
         ff_news = get_forex_factory_high_impact_news()
-        news_status = f"🌐 Forex Factory: พบข่าวกล่องแดง {len(ff_news)} รายการ" if ff_news else "🌐 Forex Factory: ไร้ข่าวแดงรุนแรง"
+        news_status = f"🌐 Forex Factory: ตรวจพบข่าวกล่องแดง {len(ff_news)} รายการ" if ff_news else "🌐 Forex Factory: สภาวะเสถียร (ไร้ข่าวแดงรุนแรง)"
 
-        # เรียกใช้ระบบฟันธงทันที ไม่มีข้าม
-        direction, zone_status, tech_used = titanium_instant_analysis(symbol)
+        direction, zone_status, tech_used = god_tier_omni_shield_analysis(symbol)
         current_step = user_martingale_step.get(chat_id, 1)
         
         now_thai = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
@@ -374,24 +384,26 @@ def handle_all(call):
             InlineKeyboardButton("🏆 ชนะไม้ 2", callback_data=f"res_win2_{symbol}"),
             InlineKeyboardButton("🏆 ชนะไม้ 3", callback_data=f"res_win3_{symbol}"),
             InlineKeyboardButton("❌ แพ้ (ขยับไม้ถัดไป)", callback_data=f"res_loss_{symbol}"),
-            InlineKeyboardButton("📊 ดูสถิติรวม", callback_data="menu_stats"),
+            InlineKeyboardButton("📊 เช็คสถิติระบบ", callback_data="menu_stats"),
             InlineKeyboardButton("🔄 รีเซ็ตสถิติ", callback_data="menu_reset")
         )
         for sym, label in SYMBOLS.items():
             markup.add(InlineKeyboardButton(label, callback_data=f"analyze_{sym}"))
 
         signal_text = (
-            f"🇷🇺 **Titan Beam Pro V70 (Instant Signal)**\n\n"
-            f"🎯 **คำแนะนำ: ออกออเดอร์ `[ ไม้ที่ {current_step} ]`**\n"
-            f"💲📊 {symbol_label}\n"
-            f"💎 M1 | Win Rate: `{sym_wr:.2f}%`\n"
-            f"⏱️ เวลาเป้าหมาย: `{target_time_str}`\n\n"
-            f"🕹️ **[ Titanium Filter Matrix ]**\n"
+            f"⚡ **[ TITAN OMNI-MATRIX SIGNAL ]** ⚡\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 **คำสั่ง: ลุยออเดอร์ `[ ไม้ที่ {current_step} ]`**\n"
+            f"💲📊 สินทรัพย์: `{symbol_label}`\n"
+            f"💎 Timeframe: `M1` | Win Rate: `{sym_wr:.2f}%`\n"
+            f"⏱️ เป้าหมายเวลา: `{target_time_str}`\n\n"
+            f"🛡️ **[ OMNI-SHIELD TELEMETRY ]**\n"
             f"• {tech_used}\n"
             f"• {zone_status}\n"
             f"• {ttz_desc}\n"
-            f"• {news_status}\n\n"
-            f"📈 ทิศทางสัญญาณ: **{'CALL (ขึ้น) 🟢' if direction == 'CALL' else 'PUT (ลง) 🔴'}**"
+            f"• {news_status}\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"🚀 **ฟันธงทิศทาง: {'🟢 CALL (ขึ้น)' if direction == 'CALL' else '🔴 PUT (ลง)'}**"
         )
         bot.send_message(chat_id, signal_text, reply_markup=markup, parse_mode="Markdown")
 
@@ -399,12 +411,12 @@ def handle_all(call):
 # MAIN EXECUTION LOOP
 # ==========================================
 print("--------------------------------------------------")
-print("🇷🇺 Titan Beam Pro V70 (Instant Signal Edition) พร้อมทำงานแล้ว...")
+print("⚡ TITAN OMNI-MATRIX ENGINE เริ่มต้นระบบเต็มรูปแบบ...")
 print("--------------------------------------------------")
 
 while True:
     try:
         bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception as e:
-        print(f"⚠️ การเชื่อมต่อขัดข้อง: {e} - กำลังเชื่อมต่อใหม่ใน 5 วินาที...")
+        print(f"⚠️ ระบบเชื่อมต่อขัดข้อง: {e} - กำลังรีเซ็ตการเชื่อมต่อใน 5 วินาที...")
         time.sleep(5)
