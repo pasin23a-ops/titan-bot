@@ -71,7 +71,7 @@ def check_user_approved(email: str, password: str = None) -> bool:
     return False
 
 # ==========================================
-# PRECISION 94% MARKET ENGINE
+# ABSOLUTE 94% MARKET ENGINE
 # ==========================================
 def get_forex_factory_high_impact_news():
     url = "https://www.forexfactory.com/ff_calendar_thisweek.xml"
@@ -96,11 +96,11 @@ def get_forex_factory_high_impact_news():
 def check_market_zone_ttz():
     now_min = get_thai_time().minute
     if now_min in [28, 29, 30, 58, 59, 0, 1]:
-        return "RED", "🔴 [94% PRECISION] โซนอันตรายรอบเปลี่ยนแท่ง"
+        return "RED", "🔴 [94% HARD-FILTER] โซนอันตรายรอบเปลี่ยนแท่ง"
     elif now_min in [14, 15, 44, 45]:
-        return "YELLOW", "🟡 [94% PRECISION] เฝ้าระวังความผันผวนรอบย่อย"
+        return "YELLOW", "🟡 [94% HARD-FILTER] เฝ้าระวังความผันผวนรอบย่อย"
     else:
-        return "GREEN", "🟢 [94% PRECISION] เสถียรภาพตลาดระดับสูงสุด"
+        return "GREEN", "🟢 [94% HARD-FILTER] เสถียรภาพตลาดระดับสูงสุด"
 
 def fetch_live_kline_data(symbol):
     try:
@@ -159,7 +159,7 @@ def omega_god_5000_layers_analysis(symbol):
     lower_wick = min(last_close, last_open) - last_low
     
     if upper_wick > (candle_body * 1.2) or lower_wick > (candle_body * 1.2):
-        return "NONE", "🛡️ [94% Guard] ไส้เทียนค่อนข้างยาว เสี่ยงพักตัว", "Wick Warning", 60.0
+        return "NONE", "🛡️ [94% Guard] ไส้เทียนยาว เสี่ยงย่อตัว", "Wick Warning", 60.0
 
     ema5 = float(df['ema_5'].iloc[-1])
     ema20 = float(df['ema_20'].iloc[-1])
@@ -171,11 +171,11 @@ def omega_god_5000_layers_analysis(symbol):
     is_downtrend = (ema5 < ema20) and (last_close < last_open) and (last_macd < 0) and (last_rsi < 52)
 
     if is_uptrend:
-        return "CALL", "⚡ [94% Precision] คอนเฟิร์มเทรนด์ขาขึ้น", "Bullish Confluence", 95.0
+        return "CALL", "⚡ [94% Hard-Filter] คอนเฟิร์มเทรนด์ขาขึ้น", "Bullish Confluence", 95.0
     elif is_downtrend:
-        return "PUT", "⚡ [94% Precision] คอนเฟิร์มเทรนด์ขาลง", "Bearish Confluence", 95.0
+        return "PUT", "⚡ [94% Hard-Filter] คอนเฟิร์มเทรนด์ขาลง", "Bearish Confluence", 95.0
     else:
-        return "NONE", "🛡️ [94% Filter] ตลาดต่ำกว่าเกณฑ์ 94% ➔ งดเทรด", "Filter Active", 75.0
+        return "NONE", "🛡️ [94% Hard-Filter] ตลาดต่ำกว่าเกณฑ์ 94%", "Filter Active", 75.0
 
 def build_dynamic_menu_keyboard(symbol):
     markup = InlineKeyboardMarkup(row_width=2)
@@ -183,9 +183,9 @@ def build_dynamic_menu_keyboard(symbol):
     _, _, _, current_conf = omega_god_5000_layers_analysis(symbol)
     
     if current_conf >= 94.0:
-        header_label = f"🟢 [ 94% READY: {get_thai_time().strftime('%H:%M:%S')} ]"
+        header_label = f"🟢 [ 94% SIGNAL READY: {get_thai_time().strftime('%H:%M:%S')} ]"
     else:
-        header_label = f"🔴 [ NO TRADE / RISK: {get_thai_time().strftime('%H:%M:%S')} ]"
+        header_label = f"🔴 [ NO TRADE ZONE: {get_thai_time().strftime('%H:%M:%S')} ]"
         
     markup.add(InlineKeyboardButton(header_label, callback_data="do_nothing"))
     
@@ -198,7 +198,6 @@ def build_dynamic_menu_keyboard(symbol):
         pure_name = label.split(' ', 1)[1] if ' ' in label else label
         _, _, _, conf = omega_god_5000_layers_analysis(sym)
         
-        # ล็อกเกณฑ์ 94% เป๊ะๆ ต่ำกว่านี้แดงทั้งหมด
         if conf >= 94.0:
             colored_label = f"🟢 {pure_name} [WIN 99%]"
         else:
@@ -218,7 +217,7 @@ def get_stats_text(chat_id):
     current_step = user_martingale_step.get(chat_id, 1)
 
     text = (
-        f"🔥 **[ 94% PRECISION // STATS ]** 🔥\n\n"
+        f"🔥 **[ ABSOLUTE 94% HARD-FILTER // STATS ]** 🔥\n\n"
         f"🎯 **ปฏิบัติการปัจจุบัน: ลุย `[ ไม้ที่ {current_step} ]`**\n\n"
         f"🏆 ชนะไม้ 1: `[ {st['win1']} ]` ({win1_rate:.2f}%)\n"
         f"🥈 ชนะไม้ 2: `[ {st['win2']} ]`\n"
@@ -293,7 +292,7 @@ def register_email(message):
             user_martingale_step[message.chat.id] = 1
             bot.reply_to(
                 message, 
-                f"🔥 **94% PRECISION AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
+                f"🔥 **ABSOLUTE 94% AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
                 reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"),
                 parse_mode="Markdown"
             )
@@ -313,14 +312,14 @@ def send_welcome(message):
     if not email or not password or not check_user_approved(email, password):
         bot.send_message(
             chat_id, 
-            "🔥 **TITAN BEAM // 94% PRECISION CORE** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
+            "🔥 **TITAN BEAM // ABSOLUTE 94% HARD-FILTER** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
             parse_mode="Markdown"
         )
         return
 
     bot.send_message(
         chat_id, 
-        "🔥 **TITAN BEAM // 94% PRECISION CORE** 🔥\nเปิดระบบเกณฑ์ 94% + ซิงค์วินาทีที่ 30 เป๊ะ:", 
+        "🔥 **TITAN BEAM // ABSOLUTE 94% HARD-FILTER** 🔥\nเปิดระบบตัดข้อความ NO TRADE ออกจากแชท 100% (ส่งเฉพาะสัญญาณชัวร์):", 
         reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"), 
         parse_mode="Markdown"
     )
@@ -407,13 +406,23 @@ def handle_all(call):
     if call.data.startswith("analyze_"):
         symbol = call.data.split("analyze_")[1]
         symbol_label = SYMBOLS.get(symbol, symbol)
+        
+        direction, zone_status, tech_used, confidence_pct = omega_god_5000_layers_analysis(symbol)
+        
+        # 🚫 HARD FILTER: ต่ำกว่า 94% ให้เด้งเตือนด้านบนป๊อปอัพ และ "ห้ามส่งข้อความลงแชทเด็ดขาด"
+        if direction == "NONE" or confidence_pct < 94.0:
+            bot.answer_callback_query(
+                call.id, 
+                f"⚠️ {symbol_label}: ตลาดไม่ถึงเกณฑ์ 94% (ได้ {confidence_pct:.1f}%) ➔ งดส่งสัญญาณลงแชทเพื่อป้องกันพอร์ต!", 
+                show_alert=True
+            )
+            return
+
         ttz_code, ttz_desc = check_market_zone_ttz()
         ff_news = get_forex_factory_high_impact_news()
         news_status = f"🌐 Forex Factory: ตรวจพบข่าวกล่องแดง {len(ff_news)} รายการ" if ff_news else "🌐 Forex Factory: สภาวะเสถียร (ไร้ข่าวแดงรุนแรง)"
 
-        direction, zone_status, tech_used, confidence_pct = omega_god_5000_layers_analysis(symbol)
         current_step = user_martingale_step.get(chat_id, 1)
-        
         now_thai = get_thai_time()
         target_time = (now_thai + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
         target_time_str = target_time.strftime('%H:%M')
@@ -424,21 +433,16 @@ def handle_all(call):
         tot_sym = sym_data["win"] + sym_data["loss"]
         sym_wr = (sym_data["win"] / tot_sym * 100) if tot_sym > 0 else 0.0
 
-        if direction == "NONE":
-            direction_icon = "⚠️ NO TRADE (ตลาดไม่ถึงเกณฑ์ 94%)"
-        elif direction == "CALL":
-            direction_icon = "🟢 CALL (ขึ้น)"
-        else:
-            direction_icon = "🔴 PUT (ลง)"
+        direction_icon = "🟢 CALL (ขึ้น)" if direction == "CALL" else "🔴 PUT (ลง)"
 
         fixed_signal_text = (
-            f"🔥 **[ 94% PRECISION SIGNAL LOCK ]** 🔥\n"
+            f"🔥 **[ 94% HARD-FILTER SIGNAL LOCK ]** 🔥\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 **คำสั่ง: ลุยออเดอร์ `[ ไม้ที่ {current_step} ]`**\n"
             f"💲📊 สินทรัพย์: `{symbol_label}`\n"
             f"💎 Timeframe: `M1` | Win Rate: `{sym_wr:.2f}%`\n"
             f"⏱️ **เป้าหมายเวลาเข้าออเดอร์: `{target_time_str}`**\n\n"
-            f"🛡️ **[ 94% PRECISION TELEMETRY ]**\n"
+            f"🛡️ **[ 94% HARD-FILTER TELEMETRY ]**\n"
             f"• {tech_used}\n"
             f"• {zone_status}\n"
             f"• {ttz_desc}\n"
@@ -461,7 +465,7 @@ def handle_all(call):
 # MAIN EXECUTION LOOP & THREADING
 # ==========================================
 print("--------------------------------------------------")
-print("🔥 TITAN 94% PRECISION CORE เริ่มต้นระบบเรียบร้อย...")
+print("🔥 TITAN ABSOLUTE 94% HARD-FILTER เริ่มต้นระบบตัดข้อความ NO TRADE เรียบร้อย...")
 print("--------------------------------------------------")
 
 refresher_thread = threading.Thread(target=background_live_refresher, daemon=True)
