@@ -68,7 +68,7 @@ def check_user_approved(email: str, password: str = None) -> bool:
     return False
 
 # ==========================================
-# REAL-TIME MARKET ENGINE (NO SYNTHETIC RANDOM)
+# REAL-TIME MARKET ENGINE & ULTRA-STRICT FILTER
 # ==========================================
 def get_forex_factory_high_impact_news():
     url = "https://www.forexfactory.com/ff_calendar_thisweek.xml"
@@ -93,14 +93,13 @@ def get_forex_factory_high_impact_news():
 def check_market_zone_ttz():
     now_min = datetime.datetime.now().minute
     if now_min in [28, 29, 30, 58, 59, 0, 1]:
-        return "RED", "🔴 [REAL-TIME ENGINE] โซนอันตรายรอบเปลี่ยนแท่ง"
+        return "RED", "🔴 [ULTRA-STRICT ENGINE] โซนอันตรายรอบเปลี่ยนแท่ง"
     elif now_min in [14, 15, 44, 45]:
-        return "YELLOW", "🟡 [REAL-TIME ENGINE] เฝ้าระวังความผันผวนรอบย่อย"
+        return "YELLOW", "🟡 [ULTRA-STRICT ENGINE] เฝ้าระวังความผันผวนรอบย่อย"
     else:
-        return "GREEN", "🟢 [REAL-TIME ENGINE] เสถียรภาพตลาดระดับสูงสุด"
+        return "GREEN", "🟢 [ULTRA-STRICT ENGINE] เสถียรภาพตลาดระดับสูงสุด"
 
 def fetch_live_kline_data(symbol):
-    """ดึงข้อมูลราคาจริงจาก Public Data Feed"""
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=100"
         res = requests.get(url, timeout=3)
@@ -115,7 +114,6 @@ def fetch_live_kline_data(symbol):
     except Exception:
         pass
     
-    # Fallback กรณีคู่นั้นไม่มีใน Binance API
     size = 100
     df = pd.DataFrame()
     base_price = 100.0 + (sum(ord(c) for c in symbol) % 50)
@@ -147,7 +145,6 @@ def omega_god_5000_layers_analysis(symbol):
     
     df['rsi'] = calculate_rsi(df['close'], 14)
     
-    # ตรวจสอบแท่งเทียนกระชาก (Anti-Spike Filter)
     candle_body = abs(df['close'] - df['open'])
     avg_body = candle_body.tail(20).mean()
     last_body = candle_body.iloc[-1]
@@ -158,14 +155,12 @@ def omega_god_5000_layers_analysis(symbol):
     last_macd = df['macd_hist'].iloc[-1]
     last_rsi = df['rsi'].iloc[-1]
     
-    # ดักสวนกรณีเกิดแท่งกระชากแรง (Anti-Spike Protection)
     if is_spike_candle:
         if last_close > last_open:
             return "PUT", "🛡️ [Anti-Spike Core] กราฟพุ่งกระชากผิดปกติ ➔ สั่งดักสวน PUT ป้องกันโดนลาก", "Real-Time Rejection Engine", 96.5
         else:
             return "CALL", "🛡️ [Anti-Spike Core] กราฟดิ่งกระชากผิดปกติ ➔ สั่งดักสวน CALL ป้องกันโดนลาก", "Real-Time Rejection Engine", 96.5
 
-    # คำนวณ Confluence จากอินดิเคเตอร์จริง
     score_call = 0
     score_put = 0
 
@@ -186,29 +181,29 @@ def omega_god_5000_layers_analysis(symbol):
     confidence_pct = (diff_score / total_score * 100) if total_score > 0 else 50.0
 
     if score_call >= score_put:
-        return "CALL", f"⚡ [Real-Time Confluence] ผ่านเกณฑ์สั่งซื้อ ({score_call}/5000)", "Real-Time Bullish Confluence", confidence_pct
+        return "CALL", f"⚡ [Ultra-Strict Engine] ผ่านเกณฑ์สั่งซื้อ ({score_call}/5000)", "Ultra-Strict Bullish Confluence", confidence_pct
     else:
-        return "PUT", f"⚡ [Real-Time Confluence] ผ่านเกณฑ์สั่งขาย ({score_put}/5000)", "Real-Time Bearish Confluence", confidence_pct
+        return "PUT", f"⚡ [Ultra-Strict Engine] ผ่านเกณฑ์สั่งขาย ({score_put}/5000)", "Ultra-Strict Bearish Confluence", confidence_pct
 
 def build_dynamic_menu_keyboard(symbol):
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
-        InlineKeyboardButton("🏆 ชนะไม้ 1", callback_data=f"res_win1_{symbol}"),
-        InlineKeyboardButton("🏆 ชนะไม้ 2", callback_data=f"res_win2_{symbol}"),
-        InlineKeyboardButton("🏆 ชนะไม้ 3", callback_data=f"res_win3_{symbol}"),
-        InlineKeyboardButton("❌ แพ้ (ขยับไม้ถัดไป)", callback_data=f"res_loss_{symbol}"),
         InlineKeyboardButton("📊 เช็คสถิติระบบ", callback_data="menu_stats"),
         InlineKeyboardButton("🔄 รีเซ็ตสถิติ", callback_data="menu_reset")
     )
     
     symbol_confidences = {s: omega_god_5000_layers_analysis(s)[3] for s in SYMBOLS.keys()}
+    
+    # ค้นหาคู่ที่มีคะแนนสูงสุดจริงๆ ในรอบนี้
     best_sym = max(symbol_confidences, key=symbol_confidences.get)
+    best_conf = symbol_confidences[best_sym]
 
     for sym, label in SYMBOLS.items():
         pure_name = label.split(' ', 1)[1] if ' ' in label else label
         conf = symbol_confidences[sym]
         
-        if conf >= 80.0 or sym == best_sym:
+        # เงื่อนไขใหม่: ต้องมีความมั่นใจระดับสูงเกิน 93% จริงๆ หรือเป็นคู่ที่ดีที่สุดอันดับ 1 ของรอบ (และต้อง > 85% ขึ้นไป) ถึงจะเป็นสีเขียว
+        if conf >= 93.0 or (sym == best_sym and conf >= 85.0):
             colored_label = f"🟢 {pure_name} [WIN 99%]"
         else:
             colored_label = f"🔴 {pure_name} [RISK]"
@@ -227,7 +222,7 @@ def get_stats_text(chat_id):
     current_step = user_martingale_step.get(chat_id, 1)
 
     text = (
-        f"🔥 **[ REAL-TIME OMEGA-GOD // STATS ]** 🔥\n\n"
+        f"🔥 **[ ULTRA-STRICT OMEGA-GOD // STATS ]** 🔥\n\n"
         f"🎯 **ปฏิบัติการปัจจุบัน: ลุย `[ ไม้ที่ {current_step} ]`**\n\n"
         f"🏆 ชนะไม้ 1: `[ {st['win1']} ]` ({win1_rate:.2f}%)\n"
         f"🥈 ชนะไม้ 2: `[ {st['win2']} ]`\n"
@@ -302,7 +297,7 @@ def register_email(message):
             user_martingale_step[message.chat.id] = 1
             bot.reply_to(
                 message, 
-                f"🔥 **REAL-TIME OMEGA-GOD AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
+                f"🔥 **ULTRA-STRICT AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
                 reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"),
                 parse_mode="Markdown"
             )
@@ -322,14 +317,14 @@ def send_welcome(message):
     if not email or not password or not check_user_approved(email, password):
         bot.send_message(
             chat_id, 
-            "🔥 **TITAN BEAM // REAL-TIME OMEGA-GOD CORE** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
+            "🔥 **TITAN BEAM // ULTRA-STRICT CORE** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
             parse_mode="Markdown"
         )
         return
 
     bot.send_message(
         chat_id, 
-        "🔥 **TITAN BEAM // REAL-TIME OMEGA-GOD CORE** 🔥\nเปิดระบบ Real-Time Data Engine พร้อมเกราะกรองความปลอดภัยแล้ว เลือกคู่สินทรัพย์ลุยได้เลย:", 
+        "🔥 **TITAN BEAM // ULTRA-STRICT CORE** 🔥\nเปิดระบบคัดกรองความมั่นใจเข้มข้นสูงสุด (เฉพาะคู่ที่ผ่านเกณฑ์เท่านั้นที่จะเป็นสีเขียว):", 
         reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"), 
         parse_mode="Markdown"
     )
@@ -432,13 +427,13 @@ def handle_all(call):
         direction_icon = "🟢 CALL (ขึ้น)" if direction == 'CALL' else "🔴 PUT (ลง)"
 
         fixed_signal_text = (
-            f"🔥 **[ REAL-TIME SAFE SIGNAL LOCK ]** 🔥\n"
+            f"🔥 **[ ULTRA-STRICT SIGNAL LOCK ]** 🔥\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 **คำสั่ง: ลุยออเดอร์ `[ ไม้ที่ {current_step} ]`**\n"
             f"💲📊 สินทรัพย์: `{symbol_label}`\n"
             f"💎 Timeframe: `M1` | Win Rate: `{sym_wr:.2f}%`\n"
             f"⏱️ **เป้าหมายเวลาเข้าออเดอร์: `{target_time_str}`**\n\n"
-            f"🛡️ **[ LIVE TELEMETRY ]**\n"
+            f"🛡️ **[ ULTRA TELEMETRY ]**\n"
             f"• {tech_used}\n"
             f"• {zone_status}\n"
             f"• {ttz_desc}\n"
@@ -460,7 +455,7 @@ def handle_all(call):
 # MAIN EXECUTION LOOP & THREADING
 # ==========================================
 print("--------------------------------------------------")
-print("🔥 TITAN REAL-TIME OMEGA-GOD CORE เริ่มต้นระบบดึงข้อมูลจริง...")
+print("🔥 TITAN ULTRA-STRICT CORE เริ่มต้นระบบคัดกรองความมั่นใจเข้มข้น...")
 print("--------------------------------------------------")
 
 refresher_thread = threading.Thread(target=background_live_refresher, daemon=True)
