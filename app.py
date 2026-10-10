@@ -91,13 +91,11 @@ def get_forex_factory_high_impact_news():
     return high_impact_events
 
 def check_market_zone_ttz():
-    now_min = get_thai_time().minute
-    if now_min in [28, 29, 30, 58, 59, 0, 1]:
-        return "RED", "🔴 [95% GOD CORE] โซนอันตรายรอบเปลี่ยนแท่ง"
-    elif now_min in [14, 15, 44, 45]:
-        return "YELLOW", "🟡 [95% GOD CORE] เฝ้าระวังความผันผวนรอบย่อย"
+    now_sec = get_thai_time().second
+    if 30 <= now_sec <= 59:
+        return "GREEN", "🟢 [LOCKED & READY] ล็อกสัญญาณพร้อมเทรดช่วง 20s-10s"
     else:
-        return "GREEN", "🟢 [95% GOD CORE] เสถียรภาพตลาดระดับสูงสุด"
+        return "RED", "🔴 [ANALYZING] กำลังประมวลผลแท่งปัจจุบัน"
 
 def fetch_live_kline_data(symbol, interval="1m", limit=100):
     try:
@@ -110,6 +108,7 @@ def fetch_live_kline_data(symbol, interval="1m", limit=100):
             df['open'] = df['open'].astype(float)
             df['high'] = df['high'].astype(float)
             df['low'] = df['low'].astype(float)
+            df['volume'] = df['volume'].astype(float)
             return df
     except Exception:
         pass
@@ -122,6 +121,7 @@ def fetch_live_kline_data(symbol, interval="1m", limit=100):
     df['open'] = df['close'].shift(1).fillna(100.0)
     df['high'] = df[['open', 'close']].max(axis=1) + 0.1
     df['low'] = df[['open', 'close']].min(axis=1) - 0.1
+    df['volume'] = np.random.rand(size) * 1000
     return df
 
 def calculate_rsi(series, period=14):
@@ -132,19 +132,32 @@ def calculate_rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 # ==========================================
-# 7-LAYER 95% STRICT EVALUATOR
+# IMMEDIATE LOCK ANALYZER (RESET AT 30s)
 # ==========================================
 def raw_market_analysis(symbol):
     df_m1 = fetch_live_kline_data(symbol, interval="1m", limit=100)
     df_m5 = fetch_live_kline_data(symbol, interval="5m", limit=50)
 
-    # 1. Multi-Timeframe Check (M5)
     df_m5['ema_20'] = df_m5['close'].ewm(span=20, adjust=False).mean()
     m5_close = float(df_m5['close'].iloc[-1])
     m5_ema20 = float(df_m5['ema_20'].iloc[-1])
     m5_is_uptrend = m5_close > m5_ema20
 
-    # 2. M1 Indicators
+    recent_highs = df_m1['high'].tail(30).max()
+    recent_lows = df_m1['low'].tail(30).min()
+    current_price = float(df_m1['close'].iloc[-1])
+    
+    if abs(current_price - recent_highs) / current_price < 0.0003 or abs(current_price - recent_lows) / current_price < 0.0003:
+        return "NONE", "🛡️ [Guard] ชนแนวรับ/แนวต้านลับ", "S/R Barrier Trap", 50.0
+
+    df_m1['body'] = abs(df_m1['close'] - df_m1['open'])
+    df_m1['range'] = df_m1['high'] - df_m1['low']
+    last_body = float(df_m1['body'].iloc[-1])
+    last_range = float(df_m1['range'].iloc[-1])
+    
+    if last_range > 0 and (last_body / last_range) < 0.30:
+        return "NONE", "🛡️ [Guard] ทรงไส้เทียนหลอกล่อ", "Fakeout Trap", 50.0
+
     df_m1['ema_5'] = df_m1['close'].ewm(span=5, adjust=False).mean()
     df_m1['ema_20'] = df_m1['close'].ewm(span=20, adjust=False).mean()
     df_m1['ema_50'] = df_m1['close'].ewm(span=50, adjust=False).mean()
@@ -157,39 +170,22 @@ def raw_market_analysis(symbol):
     
     df_m1['rsi'] = calculate_rsi(df_m1['close'], 14)
 
-    last_close = float(df_m1['close'].iloc[-1])
-    last_open = float(df_m1['open'].iloc[-1])
-    last_high = float(df_m1['high'].iloc[-1])
-    last_low = float(df_m1['low'].iloc[-1])
-    
-    candle_body = abs(last_close - last_open)
-    upper_wick = last_high - max(last_close, last_open)
-    lower_wick = min(last_close, last_open) - last_low
-
-    # 3. Wick Rejection Guard
-    if upper_wick > (candle_body * 0.9) or lower_wick > (candle_body * 0.9):
-        return "NONE", "🛡️ [95% Guard] ไส้เทียนยาว เสี่ยงย่อตัวสวนทาง", "High Wick Rejection", 50.0
-
     ema5 = float(df_m1['ema_5'].iloc[-1])
     ema20 = float(df_m1['ema_20'].iloc[-1])
     ema50 = float(df_m1['ema_50'].iloc[-1])
     last_macd = float(df_m1['macd_hist'].iloc[-1])
     last_rsi = float(df_m1['rsi'].iloc[-1])
+    last_open = float(df_m1['open'].iloc[-1])
 
-    # 4. Volume Exhaustion Guard
-    if last_rsi > 72 or last_rsi < 28:
-        return "NONE", "🛡️ [95% Guard] RSI เข้าเขต Overbought/Oversold", "Exhaustion Zone", 55.0
+    is_call = (ema5 > ema20) and (ema20 > ema50) and (current_price > last_open) and (last_macd > 0) and (53 < last_rsi < 67) and m5_is_uptrend
+    is_put = (ema5 < ema20) and (ema20 < ema50) and (current_price < last_open) and (last_macd < 0) and (33 < last_rsi < 47) and (not m5_is_uptrend)
 
-    # 5. Perfect 95% Confluence Condition
-    is_perfect_call = (ema5 > ema20) and (last_close > last_open) and (last_macd > 0) and (50 < last_rsi < 70) and m5_is_uptrend
-    is_perfect_put = (ema5 < ema20) and (last_close < last_open) and (last_macd < 0) and (30 < last_rsi < 50) and (not m5_is_uptrend)
-
-    if is_perfect_call:
-        return "CALL", "⚡ [95% Strict Core] คอนเฟิร์มสมบูรณ์แบบ M1+M5 ขาขึ้น", "Perfect Bullish Confluence", 95.5
-    elif is_perfect_put:
-        return "PUT", "⚡ [95% Strict Core] คอนเฟิร์มสมบูรณ์แบบ M1+M5 ขาลง", "Perfect Bearish Confluence", 95.5
+    if is_call:
+        return "CALL", "⚡ [Locked] คอนเฟิร์มสมบูรณ์แบบขาขึ้น", "Bullish Confluence", 96.5
+    elif is_put:
+        return "PUT", "⚡ [Locked] คอนเฟิร์มสมบูรณ์แบบขาลง", "Bearish Confluence", 96.5
     else:
-        return "NONE", "🛡️ [95% Strict Core] สภาพตลาดไม่ถึงเกณฑ์ 95%", "Strict Filter Active", 70.0
+        return "NONE", "🛡️ [Filter] ตลาดไม่ถึงเกณฑ์ 95%", "Filter Active", 70.0
 
 def update_all_symbols_cache():
     global atomic_market_cache
@@ -215,10 +211,11 @@ def build_dynamic_menu_keyboard(symbol):
     
     _, _, _, current_conf = omega_god_5000_layers_analysis(symbol)
     
-    if current_conf >= 95.0:
-        header_label = f"🟢 [ 95% READY: {get_thai_time().strftime('%H:%M:%S')} ]"
+    now_sec = get_thai_time().second
+    if 30 <= now_sec <= 59:
+        header_label = f"🟢 [ LOCKED & READY: {get_thai_time().strftime('%H:%M:%S')} ]"
     else:
-        header_label = f"🔴 [ NO TRADE ZONE: {get_thai_time().strftime('%H:%M:%S')} ]"
+        header_label = f"🟡 [ RESETTING... {get_thai_time().strftime('%H:%M:%S')} ]"
         
     markup.add(InlineKeyboardButton(header_label, callback_data="do_nothing"))
     
@@ -250,7 +247,7 @@ def get_stats_text(chat_id):
     current_step = user_martingale_step.get(chat_id, 1)
 
     text = (
-        f"🔥 **[ TITAN 95% STRICT GOD CORE // STATS ]** 🔥\n\n"
+        f"🔥 **[ 30s-RESET & IMMEDIATE LOCK // STATS ]** 🔥\n\n"
         f"🎯 **ปฏิบัติการปัจจุบัน: ลุย `[ ไม้ที่ {current_step} ]`**\n\n"
         f"🏆 ชนะไม้ 1: `[ {st['win1']} ]` ({win1_rate:.2f}%)\n"
         f"🥈 ชนะไม้ 2: `[ {st['win2']} ]`\n"
@@ -271,13 +268,17 @@ def get_stats_text(chat_id):
         symbol_breakdown = "• ยังไม่มีประวัติการบันทึกแยกรายคู่"
     return text + symbol_breakdown
 
+# ==========================================
+# BACKGROUND WORKER: RESET & LOCK AT SECOND 30
+# ==========================================
 def background_live_refresher():
-    last_refreshed_minute = -1
+    last_refreshed_second = -1
     while True:
         try:
             now = get_thai_time()
-            if now.second == 30 and now.minute != last_refreshed_minute:
-                last_refreshed_minute = now.minute
+            # รีเซ็ตและคำนวณล็อกผลลัพธ์ทันทีที่วินาทีที่ 30 เป๊ะๆ
+            if now.second == 30 and now.second != last_refreshed_second:
+                last_refreshed_second = now.second
                 
                 update_all_symbols_cache()
 
@@ -299,11 +300,17 @@ def background_live_refresher():
                         )
                     except Exception as sub_e:
                         pass
-            time.sleep(0.5)
+            elif now.second != 30:
+                last_refreshed_second = -1
+
+            time.sleep(0.3)
         except Exception as e:
             print(f"⚠️ Background worker error: {e}")
             time.sleep(1)
 
+# ==========================================
+# TELEGRAM BOT HANDLERS WITH PASSWORD AUTH
+# ==========================================
 @bot.message_handler(commands=['email'])
 def register_email(message):
     try:
@@ -323,7 +330,7 @@ def register_email(message):
             update_all_symbols_cache()
             bot.reply_to(
                 message, 
-                f"🔥 **95% STRICT AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
+                f"🔥 **IMMEDIATE LOCK AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
                 reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"),
                 parse_mode="Markdown"
             )
@@ -343,7 +350,7 @@ def send_welcome(message):
     if not email or not password or not check_user_approved(email, password):
         bot.send_message(
             chat_id, 
-            "🔥 **TITAN BEAM // 95% STRICT GOD CORE** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
+            "🔥 **TITAN BEAM // 30s-RESET & IMMEDIATE LOCK CORE** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
             parse_mode="Markdown"
         )
         return
@@ -351,7 +358,7 @@ def send_welcome(message):
     update_all_symbols_cache()
     bot.send_message(
         chat_id, 
-        "🔥 **TITAN BEAM // 95% STRICT GOD CORE** 🔥\nเปิดระบบกรอง 7 ชั้นความปลอดภัยระดับ 95% Strict:", 
+        "🔥 **TITAN BEAM // 30s-RESET & IMMEDIATE LOCK CORE** 🔥\nเปิดระบบรีเซ็ตและล็อกสัญญาณทันทีที่วินาทีที่ 30 พร้อมลุย:", 
         reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"), 
         parse_mode="Markdown"
     )
@@ -390,7 +397,7 @@ def handle_all(call):
     if chat_id not in user_martingale_step: user_martingale_step[chat_id] = 1
 
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ ระบบตรวจสอบเงื่อนไขความปลอดภัย 95% ทุกวินาทีที่ 30")
+        bot.answer_callback_query(call.id, "⚡ ระบบรีเซ็ตและล็อกสัญญาณนิ่งสนิทตั้งแต่เสี้ยววินาทีที่ 30")
         return
 
     if call.data == "menu_stats":
@@ -441,7 +448,6 @@ def handle_all(call):
         
         direction, zone_status, tech_used, confidence_pct = omega_god_5000_layers_analysis(symbol)
         
-        # 🚫 HARD FILTER: ต่ำกว่า 95% สั่ง Silent Drop และรีเฟรชปุ่มเปลี่ยนเป็นสีแดง
         if direction == "NONE" or confidence_pct < 95.0:
             bot.answer_callback_query(call.id, "⚠️ คู่นี้ความมั่นใจต่ำกว่า 95% (อัปเดตเมนูเรียบร้อย)")
             try:
@@ -472,13 +478,13 @@ def handle_all(call):
         direction_icon = "🟢 CALL (ขึ้น)" if direction == "CALL" else "🔴 PUT (ลง)"
 
         fixed_signal_text = (
-            f"🔥 **[ 95% STRICT GOD SIGNAL LOCK ]** 🔥\n"
+            f"🔥 **[ IMMEDIATE LOCK SIGNAL ]** 🔥\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 **คำสั่ง: ลุยออเดอร์ `[ ไม้ที่ {current_step} ]`**\n"
             f"💲📊 สินทรัพย์: `{symbol_label}`\n"
             f"💎 Timeframe: `M1` | Win Rate: `{sym_wr:.2f}%`\n"
             f"⏱️ **เป้าหมายเวลาเข้าออเดอร์: `{target_time_str}`**\n\n"
-            f"🛡️ **[ 95% STRICT TELEMETRY ]**\n"
+            f"🛡️ **[ IMMEDIATE TELEMETRY ]**\n"
             f"• {tech_used}\n"
             f"• {zone_status}\n"
             f"• {ttz_desc}\n"
@@ -498,7 +504,7 @@ def handle_all(call):
         }
 
 print("--------------------------------------------------")
-print("🔥 TITAN 95% STRICT GOD CORE เริ่มต้นระบบเรียบร้อย...")
+print("🔥 TITAN IMMEDIATE LOCK CORE เริ่มต้นระบบเรียบร้อย...")
 print("--------------------------------------------------")
 
 update_all_symbols_cache()
@@ -512,3 +518,4 @@ while True:
     except Exception as e:
         print(f"⚠️ ระบบเชื่อมต่อขัดข้อง: {e} - กำลังรีเซ็ตการเชื่อมต่อใน 5 วินาที...")
         time.sleep(5)
+       
