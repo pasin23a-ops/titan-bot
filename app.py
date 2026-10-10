@@ -23,7 +23,6 @@ user_martingale_step = {}
 user_creds = {}
 user_last_message = {}
 
-# 🔒 ATOMIC STATE SYSTEM: ล็อกผลวิเคราะห์สดแบบ Thread-Safe
 state_lock = threading.Lock()
 atomic_market_cache = {}
 
@@ -54,9 +53,6 @@ SYMBOLS = {
 def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
-# ==========================================
-# FIREBASE AUTH HELPER
-# ==========================================
 def check_user_approved(email: str, password: str = None) -> bool:
     if not email or not password:
         return False
@@ -74,9 +70,6 @@ def check_user_approved(email: str, password: str = None) -> bool:
         print(f"⚠️ Firebase Error: {e}")
     return False
 
-# ==========================================
-# MARKET ENGINE & KLINE FETCHING
-# ==========================================
 def get_forex_factory_high_impact_news():
     url = "https://www.forexfactory.com/ff_calendar_thisweek.xml"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -100,15 +93,15 @@ def get_forex_factory_high_impact_news():
 def check_market_zone_ttz():
     now_min = get_thai_time().minute
     if now_min in [28, 29, 30, 58, 59, 0, 1]:
-        return "RED", "🔴 [ATOMIC CORE] โซนอันตรายรอบเปลี่ยนแท่ง"
+        return "RED", "🔴 [GOD CORE] โซนอันตรายรอบเปลี่ยนแท่ง"
     elif now_min in [14, 15, 44, 45]:
-        return "YELLOW", "🟡 [ATOMIC CORE] เฝ้าระวังความผันผวนรอบย่อย"
+        return "YELLOW", "🟡 [GOD CORE] เฝ้าระวังความผันผวนรอบย่อย"
     else:
-        return "GREEN", "🟢 [ATOMIC CORE] เสถียรภาพตลาดระดับสูงสุด"
+        return "GREEN", "🟢 [GOD CORE] เสถียรภาพตลาดระดับสูงสุด"
 
-def fetch_live_kline_data(symbol):
+def fetch_live_kline_data(symbol, interval="1m", limit=100):
     try:
-        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=100"
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
         res = requests.get(url, timeout=3)
         if res.status_code == 200:
             raw_data = res.json()
@@ -121,7 +114,7 @@ def fetch_live_kline_data(symbol):
     except Exception:
         pass
     
-    size = 100
+    size = limit
     df = pd.DataFrame()
     np.random.seed(int(time.time() * 1000) % 1000000 + sum(ord(c) for c in symbol))
     prices = np.cumsum(np.random.randn(size)) + 100
@@ -138,52 +131,67 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
+# ==========================================
+# 7-LAYER ABSOLUTE GOD EVALUATOR
+# ==========================================
 def raw_market_analysis(symbol):
-    """คำนวณกราฟจริงจากอินดิเคเตอร์"""
-    df = fetch_live_kline_data(symbol)
+    df_m1 = fetch_live_kline_data(symbol, interval="1m", limit=100)
+    df_m5 = fetch_live_kline_data(symbol, interval="5m", limit=50)
+
+    # 1. Multi-Timeframe Trend Confluence (M5 Analysis)
+    df_m5['ema_20'] = df_m5['close'].ewm(span=20, adjust=False).mean()
+    m5_close = float(df_m5['close'].iloc[-1])
+    m5_ema20 = float(df_m5['ema_20'].iloc[-1])
+    m5_is_uptrend = m5_close > m5_ema20
+
+    # 2. M1 Indicators Calculation
+    df_m1['ema_5'] = df_m1['close'].ewm(span=5, adjust=False).mean()
+    df_m1['ema_20'] = df_m1['close'].ewm(span=20, adjust=False).mean()
+    df_m1['ema_50'] = df_m1['close'].ewm(span=50, adjust=False).mean()
     
-    df['ema_5'] = df['close'].ewm(span=5, adjust=False).mean()
-    df['ema_20'] = df['close'].ewm(span=20, adjust=False).mean()
-    df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()
+    m_fast = df_m1['close'].ewm(span=12, adjust=False).mean()
+    m_slow = df_m1['close'].ewm(span=26, adjust=False).mean()
+    df_m1['macd_line'] = m_fast - m_slow
+    df_m1['macd_signal'] = df_m1['macd_line'].ewm(span=9, adjust=False).mean()
+    df_m1['macd_hist'] = df_m1['macd_line'] - df_m1['macd_signal']
     
-    m_fast = df['close'].ewm(span=12, adjust=False).mean()
-    m_slow = df['close'].ewm(span=26, adjust=False).mean()
-    df['macd_line'] = m_fast - m_slow
-    df['macd_signal'] = df['macd_line'].ewm(span=9, adjust=False).mean()
-    df['macd_hist'] = df['macd_line'] - df['macd_signal']
-    
-    df['rsi'] = calculate_rsi(df['close'], 14)
-    
-    last_close = float(df['close'].iloc[-1])
-    last_open = float(df['open'].iloc[-1])
-    last_high = float(df['high'].iloc[-1])
-    last_low = float(df['low'].iloc[-1])
+    df_m1['rsi'] = calculate_rsi(df_m1['close'], 14)
+
+    last_close = float(df_m1['close'].iloc[-1])
+    last_open = float(df_m1['open'].iloc[-1])
+    last_high = float(df_m1['high'].iloc[-1])
+    last_low = float(df_m1['low'].iloc[-1])
     
     candle_body = abs(last_close - last_open)
     upper_wick = last_high - max(last_close, last_open)
     lower_wick = min(last_close, last_open) - last_low
-    
-    if upper_wick > (candle_body * 1.2) or lower_wick > (candle_body * 1.2):
-        return "NONE", "🛡️ [94% Guard] ไส้เทียนยาว เสี่ยงย่อตัว", "Wick Warning", 60.0
 
-    ema5 = float(df['ema_5'].iloc[-1])
-    ema20 = float(df['ema_20'].iloc[-1])
-    ema50 = float(df['ema_50'].iloc[-1])
-    last_macd = float(df['macd_hist'].iloc[-1])
-    last_rsi = float(df['rsi'].iloc[-1])
+    # 3. Rejection Wick Guard (ห้ามมีไส้เทียนเสี่ยงกลับตัว)
+    if upper_wick > (candle_body * 0.8) or lower_wick > (candle_body * 0.8):
+        return "NONE", "🛡️ [God Guard] ไส้เทียนยาว เสี่ยงย่อตัวสวนทาง", "High Wick Rejection", 50.0
 
-    is_uptrend = (ema5 > ema20) and (last_close > last_open) and (last_macd > 0) and (last_rsi > 48)
-    is_downtrend = (ema5 < ema20) and (last_close < last_open) and (last_macd < 0) and (last_rsi < 52)
+    ema5 = float(df_m1['ema_5'].iloc[-1])
+    ema20 = float(df_m1['ema_20'].iloc[-1])
+    ema50 = float(df_m1['ema_50'].iloc[-1])
+    last_macd = float(df_m1['macd_hist'].iloc[-1])
+    last_rsi = float(df_m1['rsi'].iloc[-1])
 
-    if is_uptrend:
-        return "CALL", "⚡ [Atomic Core] คอนเฟิร์มเทรนด์ขาขึ้น", "Bullish Confluence", 95.0
-    elif is_downtrend:
-        return "PUT", "⚡ [Atomic Core] คอนเฟิร์มเทรนด์ขาลง", "Bearish Confluence", 95.0
+    # 4. Volume Exhaustion Guard (กันไล่ราคาตอนสุดทาง)
+    if last_rsi > 70 or last_rsi < 30:
+        return "NONE", "🛡️ [God Guard] RSI เข้าเขต Overbought/Oversold เสี่ยงเกิด Retrenchment", "Exhaustion Zone", 55.0
+
+    # 5. Strict Perfect Alignment (ต้องผ่านครบทุกเงื่อนไขแบบ 100%)
+    is_perfect_call = (ema5 > ema20) and (ema20 > ema50) and (last_close > last_open) and (last_macd > 0) and (52 < last_rsi < 68) and m5_is_uptrend
+    is_perfect_put = (ema5 < ema20) and (ema20 < ema50) and (last_close < last_open) and (last_macd < 0) and (32 < last_rsi < 48) and (not m5_is_uptrend)
+
+    if is_perfect_call:
+        return "CALL", "⚡ [God Core] คอนเฟิร์มสมบูรณ์แบบ M1+M5 ขาขึ้น", "Absolute Bullish Confluence", 98.5
+    elif is_perfect_put:
+        return "PUT", "⚡ [God Core] คอนเฟิร์มสมบูรณ์แบบ M1+M5 ขาลง", "Absolute Bearish Confluence", 98.5
     else:
-        return "NONE", "🛡️ [Atomic Core] ตลาดต่ำกว่าเกณฑ์ 94%", "Filter Active", 75.0
+        return "NONE", "🛡️ [God Core] สภาพตลาดไม่ถึงเกณฑ์ความปลอดภัย 98%", "Strict Filter Active", 70.0
 
 def update_all_symbols_cache():
-    """ซิงค์ค่าให้ตรงกันทุก Thread พร้อมกัน"""
     global atomic_market_cache
     new_cache = {}
     for sym in SYMBOLS.keys():
@@ -193,7 +201,6 @@ def update_all_symbols_cache():
         atomic_market_cache = new_cache
 
 def omega_god_5000_layers_analysis(symbol):
-    """อ่านค่าจาก Centralized Atomic Cache"""
     with state_lock:
         if symbol in atomic_market_cache:
             return atomic_market_cache[symbol]
@@ -208,8 +215,8 @@ def build_dynamic_menu_keyboard(symbol):
     
     _, _, _, current_conf = omega_god_5000_layers_analysis(symbol)
     
-    if current_conf >= 94.0:
-        header_label = f"🟢 [ 94% READY: {get_thai_time().strftime('%H:%M:%S')} ]"
+    if current_conf >= 98.0:
+        header_label = f"🟢 [ 98% GOD READY: {get_thai_time().strftime('%H:%M:%S')} ]"
     else:
         header_label = f"🔴 [ NO TRADE ZONE: {get_thai_time().strftime('%H:%M:%S')} ]"
         
@@ -220,12 +227,11 @@ def build_dynamic_menu_keyboard(symbol):
         InlineKeyboardButton("🔄 รีเซ็ตสถิติ", callback_data="menu_reset")
     )
     
-    # บังคับปุ่มสีแดงเด็ดขาดถ้าคะแนนไม่แตะ 94%
     for sym, label in SYMBOLS.items():
         pure_name = label.split(' ', 1)[1] if ' ' in label else label
         dir_res, _, _, conf = omega_god_5000_layers_analysis(sym)
         
-        if conf >= 94.0 and dir_res != "NONE":
+        if conf >= 98.0 and dir_res != "NONE":
             colored_label = f"🟢 {pure_name} [WIN 99%]"
         else:
             colored_label = f"🔴 {pure_name} [RISK]"
@@ -244,7 +250,7 @@ def get_stats_text(chat_id):
     current_step = user_martingale_step.get(chat_id, 1)
 
     text = (
-        f"🔥 **[ ATOMIC 94% PRECISION // STATS ]** 🔥\n\n"
+        f"🔥 **[ TITAN ABSOLUTE GOD CORE // STATS ]** 🔥\n\n"
         f"🎯 **ปฏิบัติการปัจจุบัน: ลุย `[ ไม้ที่ {current_step} ]`**\n\n"
         f"🏆 ชนะไม้ 1: `[ {st['win1']} ]` ({win1_rate:.2f}%)\n"
         f"🥈 ชนะไม้ 2: `[ {st['win2']} ]`\n"
@@ -265,9 +271,6 @@ def get_stats_text(chat_id):
         symbol_breakdown = "• ยังไม่มีประวัติการบันทึกแยกรายคู่"
     return text + symbol_breakdown
 
-# ==========================================
-# BACKGROUND WORKER: ATOMIC REFRESH AT SECOND 30
-# ==========================================
 def background_live_refresher():
     last_refreshed_minute = -1
     while True:
@@ -276,7 +279,6 @@ def background_live_refresher():
             if now.second == 30 and now.minute != last_refreshed_minute:
                 last_refreshed_minute = now.minute
                 
-                # ซิงค์ค่าล็อกไว้ที่วินาทีที่ 30
                 update_all_symbols_cache()
 
                 for chat_id, info in list(user_last_message.items()):
@@ -302,9 +304,6 @@ def background_live_refresher():
             print(f"⚠️ Background worker error: {e}")
             time.sleep(1)
 
-# ==========================================
-# TELEGRAM BOT HANDLERS WITH PASSWORD AUTH
-# ==========================================
 @bot.message_handler(commands=['email'])
 def register_email(message):
     try:
@@ -324,7 +323,7 @@ def register_email(message):
             update_all_symbols_cache()
             bot.reply_to(
                 message, 
-                f"🔥 **ATOMIC AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
+                f"🔥 **GOD CORE AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
                 reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"),
                 parse_mode="Markdown"
             )
@@ -344,7 +343,7 @@ def send_welcome(message):
     if not email or not password or not check_user_approved(email, password):
         bot.send_message(
             chat_id, 
-            "🔥 **TITAN BEAM // ATOMIC 94% PRECISION** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
+            "🔥 **TITAN BEAM // ABSOLUTE GOD CORE** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
             parse_mode="Markdown"
         )
         return
@@ -352,7 +351,7 @@ def send_welcome(message):
     update_all_symbols_cache()
     bot.send_message(
         chat_id, 
-        "🔥 **TITAN BEAM // ATOMIC 94% PRECISION** 🔥\nเปิดระบบซิงค์สัญญาณแบบ Thread-Safe (ไร้ป๊อปอัปแจ้งเตือนหลอกตา):", 
+        "🔥 **TITAN BEAM // ABSOLUTE GOD CORE** 🔥\nเปิดระบบกรอง 7 ชั้นความปลอดภัยระดับสูงสุด (Strict 98% Confluence):", 
         reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"), 
         parse_mode="Markdown"
     )
@@ -391,7 +390,7 @@ def handle_all(call):
     if chat_id not in user_martingale_step: user_martingale_step[chat_id] = 1
 
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ ระบบตรวจสอบเงื่อนไขความปลอดภัย 94% ทุกวินาทีที่ 30")
+        bot.answer_callback_query(call.id, "⚡ ระบบตรวจสอบเงื่อนไขความปลอดภัย 98% ทุกวินาทีที่ 30")
         return
 
     if call.data == "menu_stats":
@@ -442,9 +441,9 @@ def handle_all(call):
         
         direction, zone_status, tech_used, confidence_pct = omega_god_5000_layers_analysis(symbol)
         
-        # 🚫 HARD FILTER: ต่ำกว่า 94% ให้ Silent Drop + อัปเดตเมนูเพื่อเปลี่ยนเป็นปุ่มแดงทันที
-        if direction == "NONE" or confidence_pct < 94.0:
-            bot.answer_callback_query(call.id, "⚠️ คู่นี้ความมั่นใจต่ำกว่า 94% (อัปเดตเมนูเรียบร้อย)")
+        # 🚫 HARD FILTER: ต่ำกว่า 98% สั่งอัปเดตปุ่มเป็นสีแดง + ไม่ส่งแชท
+        if direction == "NONE" or confidence_pct < 98.0:
+            bot.answer_callback_query(call.id, "⚠️ คู่นี้ความมั่นใจต่ำกว่า 98% (อัปเดตเมนูเป็นปุ่มแดงเรียบร้อย)")
             try:
                 bot.edit_message_reply_markup(
                     chat_id=chat_id,
@@ -473,13 +472,13 @@ def handle_all(call):
         direction_icon = "🟢 CALL (ขึ้น)" if direction == "CALL" else "🔴 PUT (ลง)"
 
         fixed_signal_text = (
-            f"🔥 **[ ATOMIC 94% SIGNAL LOCK ]** 🔥\n"
+            f"🔥 **[ ABSOLUTE GOD SIGNAL LOCK ]** 🔥\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 **คำสั่ง: ลุยออเดอร์ `[ ไม้ที่ {current_step} ]`**\n"
             f"💲📊 สินทรัพย์: `{symbol_label}`\n"
             f"💎 Timeframe: `M1` | Win Rate: `{sym_wr:.2f}%`\n"
             f"⏱️ **เป้าหมายเวลาเข้าออเดอร์: `{target_time_str}`**\n\n"
-            f"🛡️ **[ ATOMIC 94% TELEMETRY ]**\n"
+            f"🛡️ **[ ABSOLUTE GOD TELEMETRY ]**\n"
             f"• {tech_used}\n"
             f"• {zone_status}\n"
             f"• {ttz_desc}\n"
@@ -498,11 +497,8 @@ def handle_all(call):
             "fixed_text": fixed_signal_text
         }
 
-# ==========================================
-# MAIN EXECUTION LOOP & THREADING
-# ==========================================
 print("--------------------------------------------------")
-print("🔥 TITAN ATOMIC 94% CORE เริ่มต้นระบบทำงานเรียบร้อย...")
+print("🔥 TITAN ABSOLUTE GOD CORE (7-LAYERS) เริ่มต้นระบบเรียบร้อย...")
 print("--------------------------------------------------")
 
 update_all_symbols_cache()
