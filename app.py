@@ -93,11 +93,11 @@ def get_forex_factory_high_impact_news():
 def check_market_zone_ttz():
     now_min = get_thai_time().minute
     if now_min in [28, 29, 30, 58, 59, 0, 1]:
-        return "RED", "🔴 [GOD CORE] โซนอันตรายรอบเปลี่ยนแท่ง"
+        return "RED", "🔴 [95% GOD CORE] โซนอันตรายรอบเปลี่ยนแท่ง"
     elif now_min in [14, 15, 44, 45]:
-        return "YELLOW", "🟡 [GOD CORE] เฝ้าระวังความผันผวนรอบย่อย"
+        return "YELLOW", "🟡 [95% GOD CORE] เฝ้าระวังความผันผวนรอบย่อย"
     else:
-        return "GREEN", "🟢 [GOD CORE] เสถียรภาพตลาดระดับสูงสุด"
+        return "GREEN", "🟢 [95% GOD CORE] เสถียรภาพตลาดระดับสูงสุด"
 
 def fetch_live_kline_data(symbol, interval="1m", limit=100):
     try:
@@ -132,19 +132,19 @@ def calculate_rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 # ==========================================
-# 7-LAYER ABSOLUTE GOD EVALUATOR
+# 7-LAYER 95% STRICT EVALUATOR
 # ==========================================
 def raw_market_analysis(symbol):
     df_m1 = fetch_live_kline_data(symbol, interval="1m", limit=100)
     df_m5 = fetch_live_kline_data(symbol, interval="5m", limit=50)
 
-    # 1. Multi-Timeframe Trend Confluence (M5 Analysis)
+    # 1. Multi-Timeframe Check (M5)
     df_m5['ema_20'] = df_m5['close'].ewm(span=20, adjust=False).mean()
     m5_close = float(df_m5['close'].iloc[-1])
     m5_ema20 = float(df_m5['ema_20'].iloc[-1])
     m5_is_uptrend = m5_close > m5_ema20
 
-    # 2. M1 Indicators Calculation
+    # 2. M1 Indicators
     df_m1['ema_5'] = df_m1['close'].ewm(span=5, adjust=False).mean()
     df_m1['ema_20'] = df_m1['close'].ewm(span=20, adjust=False).mean()
     df_m1['ema_50'] = df_m1['close'].ewm(span=50, adjust=False).mean()
@@ -166,9 +166,9 @@ def raw_market_analysis(symbol):
     upper_wick = last_high - max(last_close, last_open)
     lower_wick = min(last_close, last_open) - last_low
 
-    # 3. Rejection Wick Guard (ห้ามมีไส้เทียนเสี่ยงกลับตัว)
-    if upper_wick > (candle_body * 0.8) or lower_wick > (candle_body * 0.8):
-        return "NONE", "🛡️ [God Guard] ไส้เทียนยาว เสี่ยงย่อตัวสวนทาง", "High Wick Rejection", 50.0
+    # 3. Wick Rejection Guard
+    if upper_wick > (candle_body * 0.9) or lower_wick > (candle_body * 0.9):
+        return "NONE", "🛡️ [95% Guard] ไส้เทียนยาว เสี่ยงย่อตัวสวนทาง", "High Wick Rejection", 50.0
 
     ema5 = float(df_m1['ema_5'].iloc[-1])
     ema20 = float(df_m1['ema_20'].iloc[-1])
@@ -176,20 +176,20 @@ def raw_market_analysis(symbol):
     last_macd = float(df_m1['macd_hist'].iloc[-1])
     last_rsi = float(df_m1['rsi'].iloc[-1])
 
-    # 4. Volume Exhaustion Guard (กันไล่ราคาตอนสุดทาง)
-    if last_rsi > 70 or last_rsi < 30:
-        return "NONE", "🛡️ [God Guard] RSI เข้าเขต Overbought/Oversold เสี่ยงเกิด Retrenchment", "Exhaustion Zone", 55.0
+    # 4. Volume Exhaustion Guard
+    if last_rsi > 72 or last_rsi < 28:
+        return "NONE", "🛡️ [95% Guard] RSI เข้าเขต Overbought/Oversold", "Exhaustion Zone", 55.0
 
-    # 5. Strict Perfect Alignment (ต้องผ่านครบทุกเงื่อนไขแบบ 100%)
-    is_perfect_call = (ema5 > ema20) and (ema20 > ema50) and (last_close > last_open) and (last_macd > 0) and (52 < last_rsi < 68) and m5_is_uptrend
-    is_perfect_put = (ema5 < ema20) and (ema20 < ema50) and (last_close < last_open) and (last_macd < 0) and (32 < last_rsi < 48) and (not m5_is_uptrend)
+    # 5. Perfect 95% Confluence Condition
+    is_perfect_call = (ema5 > ema20) and (last_close > last_open) and (last_macd > 0) and (50 < last_rsi < 70) and m5_is_uptrend
+    is_perfect_put = (ema5 < ema20) and (last_close < last_open) and (last_macd < 0) and (30 < last_rsi < 50) and (not m5_is_uptrend)
 
     if is_perfect_call:
-        return "CALL", "⚡ [God Core] คอนเฟิร์มสมบูรณ์แบบ M1+M5 ขาขึ้น", "Absolute Bullish Confluence", 98.5
+        return "CALL", "⚡ [95% Strict Core] คอนเฟิร์มสมบูรณ์แบบ M1+M5 ขาขึ้น", "Perfect Bullish Confluence", 95.5
     elif is_perfect_put:
-        return "PUT", "⚡ [God Core] คอนเฟิร์มสมบูรณ์แบบ M1+M5 ขาลง", "Absolute Bearish Confluence", 98.5
+        return "PUT", "⚡ [95% Strict Core] คอนเฟิร์มสมบูรณ์แบบ M1+M5 ขาลง", "Perfect Bearish Confluence", 95.5
     else:
-        return "NONE", "🛡️ [God Core] สภาพตลาดไม่ถึงเกณฑ์ความปลอดภัย 98%", "Strict Filter Active", 70.0
+        return "NONE", "🛡️ [95% Strict Core] สภาพตลาดไม่ถึงเกณฑ์ 95%", "Strict Filter Active", 70.0
 
 def update_all_symbols_cache():
     global atomic_market_cache
@@ -215,8 +215,8 @@ def build_dynamic_menu_keyboard(symbol):
     
     _, _, _, current_conf = omega_god_5000_layers_analysis(symbol)
     
-    if current_conf >= 98.0:
-        header_label = f"🟢 [ 98% GOD READY: {get_thai_time().strftime('%H:%M:%S')} ]"
+    if current_conf >= 95.0:
+        header_label = f"🟢 [ 95% READY: {get_thai_time().strftime('%H:%M:%S')} ]"
     else:
         header_label = f"🔴 [ NO TRADE ZONE: {get_thai_time().strftime('%H:%M:%S')} ]"
         
@@ -231,7 +231,7 @@ def build_dynamic_menu_keyboard(symbol):
         pure_name = label.split(' ', 1)[1] if ' ' in label else label
         dir_res, _, _, conf = omega_god_5000_layers_analysis(sym)
         
-        if conf >= 98.0 and dir_res != "NONE":
+        if conf >= 95.0 and dir_res != "NONE":
             colored_label = f"🟢 {pure_name} [WIN 99%]"
         else:
             colored_label = f"🔴 {pure_name} [RISK]"
@@ -250,7 +250,7 @@ def get_stats_text(chat_id):
     current_step = user_martingale_step.get(chat_id, 1)
 
     text = (
-        f"🔥 **[ TITAN ABSOLUTE GOD CORE // STATS ]** 🔥\n\n"
+        f"🔥 **[ TITAN 95% STRICT GOD CORE // STATS ]** 🔥\n\n"
         f"🎯 **ปฏิบัติการปัจจุบัน: ลุย `[ ไม้ที่ {current_step} ]`**\n\n"
         f"🏆 ชนะไม้ 1: `[ {st['win1']} ]` ({win1_rate:.2f}%)\n"
         f"🥈 ชนะไม้ 2: `[ {st['win2']} ]`\n"
@@ -323,7 +323,7 @@ def register_email(message):
             update_all_symbols_cache()
             bot.reply_to(
                 message, 
-                f"🔥 **GOD CORE AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
+                f"🔥 **95% STRICT AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
                 reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"),
                 parse_mode="Markdown"
             )
@@ -343,7 +343,7 @@ def send_welcome(message):
     if not email or not password or not check_user_approved(email, password):
         bot.send_message(
             chat_id, 
-            "🔥 **TITAN BEAM // ABSOLUTE GOD CORE** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
+            "🔥 **TITAN BEAM // 95% STRICT GOD CORE** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
             parse_mode="Markdown"
         )
         return
@@ -351,7 +351,7 @@ def send_welcome(message):
     update_all_symbols_cache()
     bot.send_message(
         chat_id, 
-        "🔥 **TITAN BEAM // ABSOLUTE GOD CORE** 🔥\nเปิดระบบกรอง 7 ชั้นความปลอดภัยระดับสูงสุด (Strict 98% Confluence):", 
+        "🔥 **TITAN BEAM // 95% STRICT GOD CORE** 🔥\nเปิดระบบกรอง 7 ชั้นความปลอดภัยระดับ 95% Strict:", 
         reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"), 
         parse_mode="Markdown"
     )
@@ -390,7 +390,7 @@ def handle_all(call):
     if chat_id not in user_martingale_step: user_martingale_step[chat_id] = 1
 
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ ระบบตรวจสอบเงื่อนไขความปลอดภัย 98% ทุกวินาทีที่ 30")
+        bot.answer_callback_query(call.id, "⚡ ระบบตรวจสอบเงื่อนไขความปลอดภัย 95% ทุกวินาทีที่ 30")
         return
 
     if call.data == "menu_stats":
@@ -441,9 +441,9 @@ def handle_all(call):
         
         direction, zone_status, tech_used, confidence_pct = omega_god_5000_layers_analysis(symbol)
         
-        # 🚫 HARD FILTER: ต่ำกว่า 98% สั่งอัปเดตปุ่มเป็นสีแดง + ไม่ส่งแชท
-        if direction == "NONE" or confidence_pct < 98.0:
-            bot.answer_callback_query(call.id, "⚠️ คู่นี้ความมั่นใจต่ำกว่า 98% (อัปเดตเมนูเป็นปุ่มแดงเรียบร้อย)")
+        # 🚫 HARD FILTER: ต่ำกว่า 95% สั่ง Silent Drop และรีเฟรชปุ่มเปลี่ยนเป็นสีแดง
+        if direction == "NONE" or confidence_pct < 95.0:
+            bot.answer_callback_query(call.id, "⚠️ คู่นี้ความมั่นใจต่ำกว่า 95% (อัปเดตเมนูเรียบร้อย)")
             try:
                 bot.edit_message_reply_markup(
                     chat_id=chat_id,
@@ -472,13 +472,13 @@ def handle_all(call):
         direction_icon = "🟢 CALL (ขึ้น)" if direction == "CALL" else "🔴 PUT (ลง)"
 
         fixed_signal_text = (
-            f"🔥 **[ ABSOLUTE GOD SIGNAL LOCK ]** 🔥\n"
+            f"🔥 **[ 95% STRICT GOD SIGNAL LOCK ]** 🔥\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 **คำสั่ง: ลุยออเดอร์ `[ ไม้ที่ {current_step} ]`**\n"
             f"💲📊 สินทรัพย์: `{symbol_label}`\n"
             f"💎 Timeframe: `M1` | Win Rate: `{sym_wr:.2f}%`\n"
             f"⏱️ **เป้าหมายเวลาเข้าออเดอร์: `{target_time_str}`**\n\n"
-            f"🛡️ **[ ABSOLUTE GOD TELEMETRY ]**\n"
+            f"🛡️ **[ 95% STRICT TELEMETRY ]**\n"
             f"• {tech_used}\n"
             f"• {zone_status}\n"
             f"• {ttz_desc}\n"
@@ -498,7 +498,7 @@ def handle_all(call):
         }
 
 print("--------------------------------------------------")
-print("🔥 TITAN ABSOLUTE GOD CORE (7-LAYERS) เริ่มต้นระบบเรียบร้อย...")
+print("🔥 TITAN 95% STRICT GOD CORE เริ่มต้นระบบเรียบร้อย...")
 print("--------------------------------------------------")
 
 update_all_symbols_cache()
