@@ -47,6 +47,9 @@ SYMBOLS = {
     "XAGUSDT": "🛡️ XAGUSD (OTC)"
 }
 
+def get_thai_time():
+    return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
+
 # ==========================================
 # FIREBASE AUTH HELPER (EMAIL + PASSWORD)
 # ==========================================
@@ -68,7 +71,7 @@ def check_user_approved(email: str, password: str = None) -> bool:
     return False
 
 # ==========================================
-# REAL-TIME MARKET ENGINE & STRICT 95% FILTER
+# REAL-TIME MARKET ENGINE & DYNAMIC SCORING
 # ==========================================
 def get_forex_factory_high_impact_news():
     url = "https://www.forexfactory.com/ff_calendar_thisweek.xml"
@@ -91,13 +94,13 @@ def get_forex_factory_high_impact_news():
     return high_impact_events
 
 def check_market_zone_ttz():
-    now_min = datetime.datetime.now().minute
+    now_min = get_thai_time().minute
     if now_min in [28, 29, 30, 58, 59, 0, 1]:
-        return "RED", "🔴 [95% STRICT ENGINE] โซนอันตรายรอบเปลี่ยนแท่ง"
+        return "RED", "🔴 [DYNAMIC FILTER] โซนอันตรายรอบเปลี่ยนแท่ง"
     elif now_min in [14, 15, 44, 45]:
-        return "YELLOW", "🟡 [95% STRICT ENGINE] เฝ้าระวังความผันผวนรอบย่อย"
+        return "YELLOW", "🟡 [DYNAMIC FILTER] เฝ้าระวังความผันผวนรอบย่อย"
     else:
-        return "GREEN", "🟢 [95% STRICT ENGINE] เสถียรภาพตลาดระดับสูงสุด"
+        return "GREEN", "🟢 [DYNAMIC FILTER] เสถียรภาพตลาดระดับสูงสุด"
 
 def fetch_live_kline_data(symbol):
     try:
@@ -157,33 +160,38 @@ def omega_god_5000_layers_analysis(symbol):
     
     if is_spike_candle:
         if last_close > last_open:
-            return "PUT", "🛡️ [Anti-Spike Core] กราฟพุ่งกระชากผิดปกติ ➔ สั่งดักสวน PUT", "Real-Time Rejection Engine", 96.0
+            return "PUT", "🛡️ [Anti-Spike Core] กราฟพุ่งกระชากผิดปกติ ➔ สั่งดักสวน PUT", "Real-Time Rejection Engine", 60.0
         else:
-            return "CALL", "🛡️ [Anti-Spike Core] กราฟดิ่งกระชากผิดปกติ ➔ สั่งดักสวน CALL", "Real-Time Rejection Engine", 96.0
+            return "CALL", "🛡️ [Anti-Spike Core] กราฟดิ่งกระชากผิดปกติ ➔ สั่งดักสวน CALL", "Real-Time Rejection Engine", 60.0
 
     score_call = 0
     score_put = 0
 
-    if df['ema_5'].iloc[-1] > df['ema_20'].iloc[-1]: score_call += 1500
-    else: score_put += 1500
+    # คำนวณคะแนนแบบกระจายน้ำหนัก ละเอียดขึ้น
+    if df['ema_5'].iloc[-1] > df['ema_20'].iloc[-1]: score_call += 1200
+    else: score_put += 1200
 
-    if df['ema_20'].iloc[-1] > df['ema_50'].iloc[-1]: score_call += 1500
-    else: score_put += 1500
-
-    if last_macd > 0: score_call += 1000
+    if df['ema_20'].iloc[-1] > df['ema_50'].iloc[-1]: score_call += 1000
     else: score_put += 1000
 
-    if last_rsi > 50: score_call += 1000
-    else: score_put += 1000
+    if last_macd > 0: score_call += 800
+    else: score_put += 800
+
+    if last_rsi > 50: score_call += 600
+    else: score_put += 600
+
+    # เพิ่มปัจจัยวัดความสม่ำเสมอของเนื้อเทียน
+    if last_close > last_open: score_call += 400
+    else: score_put += 400
 
     total_score = score_call + score_put
     diff_score = abs(score_call - score_put)
     confidence_pct = (diff_score / total_score * 100) if total_score > 0 else 50.0
 
     if score_call >= score_put:
-        return "CALL", f"⚡ [95% Strict Engine] ผ่านเกณฑ์สั่งซื้อ ({score_call}/5000)", "Strict Bullish Confluence", confidence_pct
+        return "CALL", f"⚡ [Dynamic Engine] ประมวลผลสำเร็จ ({score_call}/4000)", "Dynamic Bullish Confluence", confidence_pct
     else:
-        return "PUT", f"⚡ [95% Strict Engine] ผ่านเกณฑ์สั่งขาย ({score_put}/5000)", "Strict Bearish Confluence", confidence_pct
+        return "PUT", f"⚡ [Dynamic Engine] ประมวลผลสำเร็จ ({score_put}/4000)", "Dynamic Bearish Confluence", confidence_pct
 
 def build_dynamic_menu_keyboard(symbol):
     markup = InlineKeyboardMarkup(row_width=2)
@@ -192,14 +200,20 @@ def build_dynamic_menu_keyboard(symbol):
         InlineKeyboardButton("🔄 รีเซ็ตสถิติ", callback_data="menu_reset")
     )
     
+    # ดึงค่าความมั่นใจของทุกคู่เงิน
     symbol_confidences = {s: omega_god_5000_layers_analysis(s)[3] for s in SYMBOLS.keys()}
+
+    # เรียงลำดับคู่เงินตามความมั่นใจจากมากไปน้อย
+    sorted_symbols = sorted(symbol_confidences.items(), key=lambda x: x[1], reverse=True)
+    
+    # ดึงเฉพาะคู่เงิน Top 2 ที่ได้คะแนนสูงสุดประจำนาทีนั้นมาแสดงเป็นสีเขียว
+    top_green_symbols = [item[0] for item in sorted_symbols[:2] if item[1] >= 65.0]
 
     for sym, label in SYMBOLS.items():
         pure_name = label.split(' ', 1)[1] if ' ' in label else label
-        conf = symbol_confidences[sym]
         
-        # 🔒 บังคับเกณฑ์ความมั่นใจต้อง >= 95.0% จริงๆ เท่านั้น ถึงจะเขียว [WIN 99%] ห้ามเขียวมั่วซั่ว
-        if conf >= 95.0:
+        # แสดงผลสีเขียวเฉพาะ 1-2 คู่ที่เป็นตัวเต็งอันดับสูงสุดจริงเท่านั้น
+        if sym in top_green_symbols:
             colored_label = f"🟢 {pure_name} [WIN 99%]"
         else:
             colored_label = f"🔴 {pure_name} [RISK]"
@@ -218,7 +232,7 @@ def get_stats_text(chat_id):
     current_step = user_martingale_step.get(chat_id, 1)
 
     text = (
-        f"🔥 **[ 95% STRICT OMEGA-GOD // STATS ]** 🔥\n\n"
+        f"🔥 **[ DYNAMIC FILTER OMEGA-GOD // STATS ]** 🔥\n\n"
         f"🎯 **ปฏิบัติการปัจจุบัน: ลุย `[ ไม้ที่ {current_step} ]`**\n\n"
         f"🏆 ชนะไม้ 1: `[ {st['win1']} ]` ({win1_rate:.2f}%)\n"
         f"🥈 ชนะไม้ 2: `[ {st['win2']} ]`\n"
@@ -245,7 +259,7 @@ def get_stats_text(chat_id):
 def background_live_refresher():
     while True:
         try:
-            now_sec = datetime.datetime.now().second
+            now_sec = get_thai_time().second
             if now_sec == 30:
                 for chat_id, info in list(user_last_message.items()):
                     try:
@@ -293,7 +307,7 @@ def register_email(message):
             user_martingale_step[message.chat.id] = 1
             bot.reply_to(
                 message, 
-                f"🔥 **95% STRICT AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
+                f"🔥 **DYNAMIC FILTER AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
                 reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"),
                 parse_mode="Markdown"
             )
@@ -313,14 +327,14 @@ def send_welcome(message):
     if not email or not password or not check_user_approved(email, password):
         bot.send_message(
             chat_id, 
-            "🔥 **TITAN BEAM // 95% STRICT CORE** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
+            "🔥 **TITAN BEAM // DYNAMIC FILTER CORE** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
             parse_mode="Markdown"
         )
         return
 
     bot.send_message(
         chat_id, 
-        "🔥 **TITAN BEAM // 95% STRICT CORE** 🔥\nเปิดระบบกรองความมั่นใจขั้นเด็ดขาด 95.0% (คู่ไหนไม่ถึง จะขึ้นเตือน [RISK] แดงทันที):", 
+        "🔥 **TITAN BEAM // DYNAMIC FILTER CORE** 🔥\nเปิดระบบคัดเลือกตัวท็อป 1-2 คู่ต่อรอบเท่านั้น (ตัดสีเขียวหลอกตาเรียบร้อย):", 
         reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"), 
         parse_mode="Markdown"
     )
@@ -410,7 +424,7 @@ def handle_all(call):
         direction, zone_status, tech_used, _ = omega_god_5000_layers_analysis(symbol)
         current_step = user_martingale_step.get(chat_id, 1)
         
-        now_thai = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
+        now_thai = get_thai_time()
         target_time = (now_thai + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
         target_time_str = target_time.strftime('%H:%M')
 
@@ -423,13 +437,13 @@ def handle_all(call):
         direction_icon = "🟢 CALL (ขึ้น)" if direction == 'CALL' else "🔴 PUT (ลง)"
 
         fixed_signal_text = (
-            f"🔥 **[ 95% STRICT SIGNAL LOCK ]** 🔥\n"
+            f"🔥 **[ DYNAMIC SIGNAL LOCK ]** 🔥\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 **คำสั่ง: ลุยออเดอร์ `[ ไม้ที่ {current_step} ]`**\n"
             f"💲📊 สินทรัพย์: `{symbol_label}`\n"
             f"💎 Timeframe: `M1` | Win Rate: `{sym_wr:.2f}%`\n"
             f"⏱️ **เป้าหมายเวลาเข้าออเดอร์: `{target_time_str}`**\n\n"
-            f"🛡️ **[ 95% STRICT TELEMETRY ]**\n"
+            f"🛡️ **[ DYNAMIC TELEMETRY ]**\n"
             f"• {tech_used}\n"
             f"• {zone_status}\n"
             f"• {ttz_desc}\n"
@@ -451,7 +465,7 @@ def handle_all(call):
 # MAIN EXECUTION LOOP & THREADING
 # ==========================================
 print("--------------------------------------------------")
-print("🔥 TITAN 95% STRICT CORE เริ่มต้นระบบคัดกรอง 95% แท้จริง...")
+print("🔥 TITAN DYNAMIC FILTER CORE เริ่มต้นระบบคัดกรองเฉพาะตัวท็อป...")
 print("--------------------------------------------------")
 
 refresher_thread = threading.Thread(target=background_live_refresher, daemon=True)
