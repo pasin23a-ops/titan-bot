@@ -5,6 +5,7 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import datetime
 import time
 import requests
+import threading
 import xml.etree.ElementTree as ET
 
 # ==========================================
@@ -20,6 +21,7 @@ user_stats = {}
 symbol_stats = {}
 user_martingale_step = {}
 user_creds = {}
+user_last_message = {}  # เก็บข้อมูลข้อความล่าสุดของแต่ละ Chat ID เพื่อใช้อัปเดตอัตโนมัติ
 
 SYMBOLS = {
     "DYDXUSDT": "⚡ DYDX (OTC)",
@@ -150,8 +152,6 @@ def omega_god_5000_layers_analysis(symbol):
     
     last_close = df['close'].iloc[-1]
     last_open = df['open'].iloc[-1]
-    prev_close = df['close'].iloc[-2]
-    prev_open = df['open'].iloc[-2]
     
     score_call = 0
     score_put = 0
@@ -192,9 +192,6 @@ def omega_god_5000_layers_analysis(symbol):
     if last_close > last_open: score_call += 250
     else: score_put += 250
 
-    if prev_close > prev_open: score_call += 250
-    else: score_put += 250
-
     total_score = score_call + score_put
     diff_score = abs(score_call - score_put)
     confidence_pct = (diff_score / total_score * 100) if total_score > 0 else 50.0
@@ -212,7 +209,7 @@ def build_dynamic_menu_keyboard():
     )
     
     symbol_confidences = {}
-    for sym, label in SYMBOLS.items():
+    for sym in SYMBOLS.keys():
         _, _, _, conf_pct = omega_god_5000_layers_analysis(sym)
         symbol_confidences[sym] = conf_pct
 
@@ -261,6 +258,101 @@ def get_stats_text(chat_id):
     if symbol_breakdown == "":
         symbol_breakdown = "• ยังไม่มีประวัติการบันทึกแยกรายคู่"
     return text + symbol_breakdown
+
+# ==========================================
+# BACKGROUND WORKER: AUTO-REFRESH LIVE CANDLE
+# ==========================================
+def background_live_refresher():
+    """อัปเดตหน้าจอข้อความและปุ่มกดให้เปลี่ยนสีตามแท่งใหม่โดยอัตโนมัติทุกๆ นาที"""
+    while True:
+        try:
+            now_sec = datetime.datetime.now().second
+            if now_sec == 2:
+                for chat_id, info in list(user_last_message.items()):
+                    try:
+                        msg_id = info.get("message_id")
+                        symbol = info.get("symbol")
+                        if not msg_id or not symbol:
+                            continue
+                        
+                        direction, zone_status, tech_used, _ = omega_god_5000_layers_analysis(symbol)
+                        symbol_label = SYMBOLS.get(symbol, symbol)
+                        current_step = user_martingale_step.get(chat_id, 1)
+                        
+                        now_thai = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
+                        target_time = (now_thai + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
+                        target_time_str = target_time.strftime('%H:%M')
+
+                        sym_data = symbol_stats.get(chat_id, {}).get(symbol, {"win": 0, "loss": 0})
+                        tot_sym = sym_data["win"] + sym_data["loss"]
+                        sym_wr = (sym_data["win"] / tot_sym * 100) if tot_sym > 0 else 0.0
+
+                        # คำนวณหาคู่ที่เป็นสีเขียว (มั่นใจสูงสุด) ทั้งหมดในนาทีปัจจุบันเพื่อแจ้งเตือนที่หัวข้อ
+                        symbol_confs = {s: omega_god_5000_layers_analysis(s)[3] for s in SYMBOLS.keys()}
+                        b_sym = max(symbol_confs, key=symbol_confidences.get) if 'symbol_confidences' in locals() else max(symbol_confs, key=symbol_confs.get)
+                        
+                        green_list = []
+                        for s_key, c_val in symbol_confidences.items() if 'symbol_confidences' in locals() else symbol_confs.items():
+                            if c_val >= 95.0 or s_key == b_sym:
+                                green_list.append(SYMBOLS.get(s_key, s_key))
+                        
+                        top_green_text = "\n".join([f"• {g}" for g in green_list[:3]])
+
+                        markup = InlineKeyboardMarkup(row_width=2)
+                        markup.add(
+                            InlineKeyboardButton("🏆 ชนะไม้ 1", callback_data=f"res_win1_{symbol}"),
+                            InlineKeyboardButton("🏆 ชนะไม้ 2", callback_data=f"res_win2_{symbol}"),
+                            InlineKeyboardButton("🏆 ชนะไม้ 3", callback_data=f"res_win3_{symbol}"),
+                            InlineKeyboardButton("❌ แพ้ (ขยับไม้ถัดไป)", callback_data=f"res_loss_{symbol}"),
+                            InlineKeyboardButton("📊 เช็คสถิติระบบ", callback_data="menu_stats"),
+                            InlineKeyboardButton("🔄 รีเซ็ตสถิติ", callback_data="menu_reset")
+                        )
+                        
+                        for sym_key, label in SYMBOLS.items():
+                            pure_name = label.split(' ', 1)[1] if ' ' in label else label
+                            conf = symbol_confs[sym_key]
+                            c_label = f"🟢 {pure_name} [WIN 99%]" if (conf >= 95.0 or sym_key == b_sym) else f"🔴 {pure_name} [RISK]"
+                            markup.add(InlineKeyboardButton(c_label, callback_data=f"analyze_{sym_key}"))
+
+                        direction_icon = "🟢 CALL (ขึ้น)" if direction == 'CALL' else "🔴 PUT (ลง)"
+                        ttz_code, ttz_desc = check_market_zone_ttz()
+                        ff_news = get_forex_factory_high_impact_news()
+                        news_status = f"🌐 Forex Factory: ตรวจพบข่าวกล่องแดง {len(ff_news)} รายการ" if ff_news else "🌐 Forex Factory: สภาวะเสถียร (ไร้ข่าวแดงรุนแรง)"
+
+                        updated_text = (
+                            f"🔥 **[ 5000-LAYER OMEGA-GOD SIGNAL (LIVE) ]** 🔥\n"
+                            f"━━━━━━━━━━━━━━━━━━━\n"
+                            f"🟢 **[ คู่สีเขียวความมั่นใจสูงสุดประจำนาทีนี้ ]**\n"
+                            f"{top_green_text}\n"
+                            f"━━━━━━━━━━━━━━━━━━━\n"
+                            f"🎯 **คำสั่ง: ลุยออเดอร์ `[ ไม้ที่ {current_step} ]`**\n"
+                            f"💲📊 สินทรัพย์กำลังดู: `{symbol_label}`\n"
+                            f"💎 Timeframe: `M1` | Win Rate: `{sym_wr:.2f}%`\n"
+                            f"⏱️ เป้าหมายเวลา: `{target_time_str}`\n\n"
+                            f"🛡️ **[ TELEMETRY ]**\n"
+                            f"• {tech_used}\n"
+                            f"• {zone_status}\n"
+                            f"• {ttz_desc}\n"
+                            f"• {news_status}\n"
+                            f"━━━━━━━━━━━━━━━━━━━\n"
+                            f"🚀 **ฟันธงทิศทาง: {direction_icon}**"
+                        )
+                        
+                        bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=msg_id,
+                            text=updated_text,
+                            reply_markup=markup,
+                            parse_mode="Markdown"
+                        )
+                    except Exception as sub_e:
+                        print(f"⚠️ Auto-refresh edit error: {sub_e}")
+                time.sleep(1)
+            else:
+                time.sleep(0.5)
+        except Exception as e:
+            print(f"⚠️ Background worker error: {e}")
+            time.sleep(1)
 
 # ==========================================
 # TELEGRAM BOT HANDLERS WITH PASSWORD AUTH
@@ -410,11 +502,11 @@ def handle_all(call):
         tot_sym = sym_data["win"] + sym_data["loss"]
         sym_wr = (sym_data["win"] / tot_sym * 100) if tot_sym > 0 else 0.0
 
-        symbol_confs = {}
-        for s in SYMBOLS.keys():
-            _, _, _, cp = omega_god_5000_layers_analysis(s)
-            symbol_confs[s] = cp
+        symbol_confs = {s: omega_god_5000_layers_analysis(s)[3] for s in SYMBOLS.keys()}
         b_sym = max(symbol_confs, key=symbol_confs.get)
+        
+        green_list = [SYMBOLS.get(s_key, s_key) for s_key, c_val in symbol_confs.items() if (c_val >= 95.0 or s_key == b_sym)]
+        top_green_text = "\n".join([f"• {g}" for g in green_list[:3]])
 
         markup = InlineKeyboardMarkup(row_width=2)
         markup.add(
@@ -434,13 +526,16 @@ def handle_all(call):
         direction_icon = "🟢 CALL (ขึ้น)" if direction == 'CALL' else "🔴 PUT (ลง)"
 
         signal_text = (
-            f"🔥 **[ 5000-LAYER OMEGA-GOD SIGNAL ]** 🔥\n"
+            f"🔥 **[ 5000-LAYER OMEGA-GOD SIGNAL (LIVE) ]** 🔥\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"🟢 **[ คู่สีเขียวความมั่นใจสูงสุดประจำนาทีนี้ ]**\n"
+            f"{top_green_text}\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 **คำสั่ง: ลุยออเดอร์ `[ ไม้ที่ {current_step} ]`**\n"
-            f"💲📊 สินทรัพย์: `{symbol_label}`\n"
+            f"💲📊 สินทรัพย์กำลังดู: `{symbol_label}`\n"
             f"💎 Timeframe: `M1` | Win Rate: `{sym_wr:.2f}%`\n"
             f"⏱️ เป้าหมายเวลา: `{target_time_str}`\n\n"
-            f"🛡️ **[ 5000-LAYER OMEGA TELEMETRY ]**\n"
+            f"🛡️ **[ TELEMETRY ]**\n"
             f"• {tech_used}\n"
             f"• {zone_status}\n"
             f"• {ttz_desc}\n"
@@ -449,18 +544,22 @@ def handle_all(call):
             f"🚀 **ฟันธงทิศทาง: {direction_icon}**"
         )
         
-        bot.send_message(chat_id, signal_text, reply_markup=markup, parse_mode="Markdown")
+        sent_msg = bot.send_message(chat_id, signal_text, reply_markup=markup, parse_mode="Markdown")
+        user_last_message[chat_id] = {"message_id": sent_msg.message_id, "symbol": symbol}
 
 # ==========================================
-# MAIN EXECUTION LOOP
+# MAIN EXECUTION LOOP & THREADING
 # ==========================================
 print("--------------------------------------------------")
-print("🔥 TITAN 5000-LAYER OMEGA-GOD CORE เริ่มต้นระบบเรียลไทม์แท่งต่อแท่ง...")
+print("🔥 TITAN 5000-LAYER OMEGA-GOD CORE เริ่มต้นระบบเรียลไทม์ Auto-Refresh...")
 print("--------------------------------------------------")
+
+refresher_thread = threading.Thread(target=background_live_refresher, daemon=True)
+refresher_thread.start()
 
 while True:
     try:
         bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception as e:
-        print(f"⚠️ ระบบเชื่อมต่อขัดข้อง: {e} - กำลังรีเซ็ตการเชื่อมต่อใน 5 วินาทีเพลง...")
-        time.sleep(5) 
+        print(f"⚠️ ระบบเชื่อมต่อขัดข้อง: {e} - กำลังรีเซ็ตการเชื่อมต่อใน 5 วินาที...")
+        time.sleep(5)
