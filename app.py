@@ -71,7 +71,7 @@ def check_user_approved(email: str, password: str = None) -> bool:
     return False
 
 # ==========================================
-# ULTRA-STRICT 99% MARKET ENGINE (FIXED BUG)
+# PRECISION 94% MARKET ENGINE
 # ==========================================
 def get_forex_factory_high_impact_news():
     url = "https://www.forexfactory.com/ff_calendar_thisweek.xml"
@@ -96,11 +96,11 @@ def get_forex_factory_high_impact_news():
 def check_market_zone_ttz():
     now_min = get_thai_time().minute
     if now_min in [28, 29, 30, 58, 59, 0, 1]:
-        return "RED", "🔴 [99% STRICT] โซนอันตรายรอบเปลี่ยนแท่ง"
+        return "RED", "🔴 [94% PRECISION] โซนอันตรายรอบเปลี่ยนแท่ง"
     elif now_min in [14, 15, 44, 45]:
-        return "YELLOW", "🟡 [99% STRICT] เฝ้าระวังความผันผวนรอบย่อย"
+        return "YELLOW", "🟡 [94% PRECISION] เฝ้าระวังความผันผวนรอบย่อย"
     else:
-        return "GREEN", "🟢 [99% STRICT] เสถียรภาพตลาดระดับสูงสุด"
+        return "GREEN", "🟢 [94% PRECISION] เสถียรภาพตลาดระดับสูงสุด"
 
 def fetch_live_kline_data(symbol):
     try:
@@ -149,7 +149,6 @@ def omega_god_5000_layers_analysis(symbol):
     
     df['rsi'] = calculate_rsi(df['close'], 14)
     
-    # ดึงค่าตัวเลขแท่งล่าสุดเพื่อป้องกันข้อผิดพลาด Series ambiguity
     last_close = float(df['close'].iloc[-1])
     last_open = float(df['open'].iloc[-1])
     last_high = float(df['high'].iloc[-1])
@@ -159,39 +158,36 @@ def omega_god_5000_layers_analysis(symbol):
     upper_wick = last_high - max(last_close, last_open)
     lower_wick = min(last_close, last_open) - last_low
     
-    # กรองไส้เทียนสบัดเสี่ยงย่อตัว
-    if upper_wick > candle_body or lower_wick > candle_body:
-        return "NONE", "🛡️ [99% Guard] ตรวจพบไส้เทียนสบัดเสี่ยงย่อตัว ➔ ยกเลิกสัญญาณ", "Wick Rejection Risk", 50.0
+    if upper_wick > (candle_body * 1.2) or lower_wick > (candle_body * 1.2):
+        return "NONE", "🛡️ [94% Guard] ไส้เทียนค่อนข้างยาว เสี่ยงพักตัว", "Wick Warning", 60.0
 
     ema5 = float(df['ema_5'].iloc[-1])
     ema20 = float(df['ema_20'].iloc[-1])
     ema50 = float(df['ema_50'].iloc[-1])
     last_macd = float(df['macd_hist'].iloc[-1])
     last_rsi = float(df['rsi'].iloc[-1])
-    
-    score_call = 0
-    score_put = 0
 
-    # เงื่อนไขสมบูรณ์แบบ 96%-99%
-    is_perfect_uptrend = (ema5 > ema20) and (ema20 > ema50) and (last_close > last_open) and (last_macd > 0) and (50 < last_rsi < 72)
-    is_perfect_downtrend = (ema5 < ema20) and (ema20 < ema50) and (last_close < last_open) and (last_macd < 0) and (28 < last_rsi < 50)
+    is_uptrend = (ema5 > ema20) and (last_close > last_open) and (last_macd > 0) and (last_rsi > 48)
+    is_downtrend = (ema5 < ema20) and (last_close < last_open) and (last_macd < 0) and (last_rsi < 52)
 
-    if is_perfect_uptrend:
-        score_call = 100
-        confidence_pct = 98.5
-        return "CALL", f"⚡ [99% Ultra-Strict] คอนเฟิร์มสมบูรณ์แบบขาขึ้น ({score_call}/100)", "Perfect Bullish Confluence", confidence_pct
-    elif is_perfect_downtrend:
-        score_put = 100
-        confidence_pct = 98.5
-        return "PUT", f"⚡ [99% Ultra-Strict] คอนเฟิร์มสมบูรณ์แบบขาลง ({score_put}/100)", "Perfect Bearish Confluence", confidence_pct
+    if is_uptrend:
+        return "CALL", "⚡ [94% Precision] คอนเฟิร์มเทรนด์ขาขึ้น", "Bullish Confluence", 95.0
+    elif is_downtrend:
+        return "PUT", "⚡ [94% Precision] คอนเฟิร์มเทรนด์ขาลง", "Bearish Confluence", 95.0
     else:
-        return "NONE", "🛡️ [99% Filter] สภาวะตลาดยังไม่สมบูรณ์ระดับ 96%+ ➔ ป้องกันความเสี่ยง", "Strict Filter Active", 70.0
+        return "NONE", "🛡️ [94% Filter] ตลาดต่ำกว่าเกณฑ์ 94% ➔ งดเทรด", "Filter Active", 75.0
 
 def build_dynamic_menu_keyboard(symbol):
     markup = InlineKeyboardMarkup(row_width=2)
     
-    current_time_str = get_thai_time().strftime('%H:%M:%S')
-    markup.add(InlineKeyboardButton(f"🟢 [ 96-99% STRICT SYNC: {current_time_str} ]", callback_data="do_nothing"))
+    _, _, _, current_conf = omega_god_5000_layers_analysis(symbol)
+    
+    if current_conf >= 94.0:
+        header_label = f"🟢 [ 94% READY: {get_thai_time().strftime('%H:%M:%S')} ]"
+    else:
+        header_label = f"🔴 [ NO TRADE / RISK: {get_thai_time().strftime('%H:%M:%S')} ]"
+        
+    markup.add(InlineKeyboardButton(header_label, callback_data="do_nothing"))
     
     markup.add(
         InlineKeyboardButton("📊 เช็คสถิติระบบ", callback_data="menu_stats"),
@@ -202,7 +198,8 @@ def build_dynamic_menu_keyboard(symbol):
         pure_name = label.split(' ', 1)[1] if ' ' in label else label
         _, _, _, conf = omega_god_5000_layers_analysis(sym)
         
-        if conf >= 96.0:
+        # ล็อกเกณฑ์ 94% เป๊ะๆ ต่ำกว่านี้แดงทั้งหมด
+        if conf >= 94.0:
             colored_label = f"🟢 {pure_name} [WIN 99%]"
         else:
             colored_label = f"🔴 {pure_name} [RISK]"
@@ -221,7 +218,7 @@ def get_stats_text(chat_id):
     current_step = user_martingale_step.get(chat_id, 1)
 
     text = (
-        f"🔥 **[ 99% ULTRA-STRICT // STATS ]** 🔥\n\n"
+        f"🔥 **[ 94% PRECISION // STATS ]** 🔥\n\n"
         f"🎯 **ปฏิบัติการปัจจุบัน: ลุย `[ ไม้ที่ {current_step} ]`**\n\n"
         f"🏆 ชนะไม้ 1: `[ {st['win1']} ]` ({win1_rate:.2f}%)\n"
         f"🥈 ชนะไม้ 2: `[ {st['win2']} ]`\n"
@@ -296,7 +293,7 @@ def register_email(message):
             user_martingale_step[message.chat.id] = 1
             bot.reply_to(
                 message, 
-                f"🔥 **99% STRICT AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
+                f"🔥 **94% PRECISION AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
                 reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"),
                 parse_mode="Markdown"
             )
@@ -316,14 +313,14 @@ def send_welcome(message):
     if not email or not password or not check_user_approved(email, password):
         bot.send_message(
             chat_id, 
-            "🔥 **TITAN BEAM // 99% ULTRA-STRICT CORE** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
+            "🔥 **TITAN BEAM // 94% PRECISION CORE** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
             parse_mode="Markdown"
         )
         return
 
     bot.send_message(
         chat_id, 
-        "🔥 **TITAN BEAM // 99% ULTRA-STRICT CORE** 🔥\nเปิดระบบกรองเข้มงวด 96%-99% + ซิงค์วินาทีที่ 30 เป๊ะ:", 
+        "🔥 **TITAN BEAM // 94% PRECISION CORE** 🔥\nเปิดระบบเกณฑ์ 94% + ซิงค์วินาทีที่ 30 เป๊ะ:", 
         reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"), 
         parse_mode="Markdown"
     )
@@ -362,7 +359,7 @@ def handle_all(call):
     if chat_id not in user_martingale_step: user_martingale_step[chat_id] = 1
 
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ ระบบซิงค์คำนวณความแม่นยำสูงทุกวินาทีที่ 30")
+        bot.answer_callback_query(call.id, "⚡ ระบบตรวจสอบเงื่อนไขความปลอดภัย 94% ทุกวินาทีที่ 30")
         return
 
     if call.data == "menu_stats":
@@ -428,20 +425,20 @@ def handle_all(call):
         sym_wr = (sym_data["win"] / tot_sym * 100) if tot_sym > 0 else 0.0
 
         if direction == "NONE":
-            direction_icon = "⚠️ NO TRADE (ตลาดไม่ถึงเกณฑ์ 96%)"
+            direction_icon = "⚠️ NO TRADE (ตลาดไม่ถึงเกณฑ์ 94%)"
         elif direction == "CALL":
             direction_icon = "🟢 CALL (ขึ้น)"
         else:
             direction_icon = "🔴 PUT (ลง)"
 
         fixed_signal_text = (
-            f"🔥 **[ 99% ULTRA-STRICT SIGNAL LOCK ]** 🔥\n"
+            f"🔥 **[ 94% PRECISION SIGNAL LOCK ]** 🔥\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 **คำสั่ง: ลุยออเดอร์ `[ ไม้ที่ {current_step} ]`**\n"
             f"💲📊 สินทรัพย์: `{symbol_label}`\n"
             f"💎 Timeframe: `M1` | Win Rate: `{sym_wr:.2f}%`\n"
             f"⏱️ **เป้าหมายเวลาเข้าออเดอร์: `{target_time_str}`**\n\n"
-            f"🛡️ **[ 99% STRICT TELEMETRY ]**\n"
+            f"🛡️ **[ 94% PRECISION TELEMETRY ]**\n"
             f"• {tech_used}\n"
             f"• {zone_status}\n"
             f"• {ttz_desc}\n"
@@ -464,7 +461,7 @@ def handle_all(call):
 # MAIN EXECUTION LOOP & THREADING
 # ==========================================
 print("--------------------------------------------------")
-print("🔥 TITAN 99% ULTRA-STRICT CORE เริ่มต้นระบบคำนวณความแม่นยำสูง (FIXED)...")
+print("🔥 TITAN 94% PRECISION CORE เริ่มต้นระบบเรียบร้อย...")
 print("--------------------------------------------------")
 
 refresher_thread = threading.Thread(target=background_live_refresher, daemon=True)
