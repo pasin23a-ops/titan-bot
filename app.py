@@ -96,11 +96,11 @@ def get_forex_factory_high_impact_news():
 def check_market_zone_ttz():
     now_min = get_thai_time().minute
     if now_min in [28, 29, 30, 58, 59, 0, 1]:
-        return "RED", "🔴 [REAL ENGINE] โซนอันตรายรอบเปลี่ยนแท่ง"
+        return "RED", "🔴 [M1 SYNC] โซนอันตรายรอบเปลี่ยนแท่ง"
     elif now_min in [14, 15, 44, 45]:
-        return "YELLOW", "🟡 [REAL ENGINE] เฝ้าระวังความผันผวนรอบย่อย"
+        return "YELLOW", "🟡 [M1 SYNC] เฝ้าระวังความผันผวนรอบย่อย"
     else:
-        return "GREEN", "🟢 [REAL ENGINE] เสถียรภาพตลาดระดับสูงสุด"
+        return "GREEN", "🟢 [M1 SYNC] เสถียรภาพตลาดระดับสูงสุด"
 
 def fetch_live_kline_data(symbol):
     try:
@@ -117,7 +117,6 @@ def fetch_live_kline_data(symbol):
     except Exception:
         pass
     
-    # กรณี API ไม่ตอบสนอง ดึงราคาสุ่มเพื่อป้องกันพฤติกรรมเรียงซ้ำ
     size = 100
     df = pd.DataFrame()
     np.random.seed(int(time.time() * 1000) % 1000000 + sum(ord(c) for c in symbol))
@@ -162,14 +161,13 @@ def omega_god_5000_layers_analysis(symbol):
     
     if is_spike_candle:
         if last_close > last_open:
-            return "PUT", "🛡️ [Anti-Spike Core] กราฟพุ่งกระชาก ➔ สั่งดักสวน PUT", "Real Rejection Engine", 50.0
+            return "PUT", "🛡️ [Anti-Spike Core] กราฟพุ่งกระชาก ➔ สั่งดักสวน PUT", "M1 Rejection Engine", 50.0
         else:
-            return "CALL", "🛡️ [Anti-Spike Core] กราฟดิ่งกระชาก ➔ สั่งดักสวน CALL", "Real Rejection Engine", 50.0
+            return "CALL", "🛡️ [Anti-Spike Core] กราฟดิ่งกระชาก ➔ สั่งดักสวน CALL", "M1 Rejection Engine", 50.0
 
     score_call = 0
     score_put = 0
 
-    # คำนวณความแข็งแกร่งของเทรนด์จริง
     if df['ema_5'].iloc[-1] > df['ema_20'].iloc[-1]: score_call += 25
     else: score_put += 25
 
@@ -186,35 +184,32 @@ def omega_god_5000_layers_analysis(symbol):
     else: score_put += 15
 
     total_score = max(score_call, score_put)
-    
-    # ตรวจสอบการคอนเฟิร์มพร้อมกันทุกอินดิเคเตอร์ (Confluence Check)
     if total_score >= 85:
         confidence_pct = float(total_score)
     else:
-        confidence_pct = float(total_score * 0.75) # สัญญาณไม่ชัด ลดระดับคะแนนทันที
+        confidence_pct = float(total_score * 0.75)
 
     if score_call >= score_put:
-        return "CALL", f"⚡ [Real Engine] วิเคราะห์คะแนนจริง ({score_call}/100)", "Bullish Confluence", confidence_pct
+        return "CALL", f"⚡ [M1 Engine] คำนวณกราฟแท่งปัจจุบัน ({score_call}/100)", "Bullish Confluence", confidence_pct
     else:
-        return "PUT", f"⚡ [Real Engine] วิเคราะห์คะแนนจริง ({score_put}/100)", "Bearish Confluence", confidence_pct
+        return "PUT", f"⚡ [M1 Engine] คำนวณกราฟแท่งปัจจุบัน ({score_put}/100)", "Bearish Confluence", confidence_pct
 
 def build_dynamic_menu_keyboard(symbol):
     markup = InlineKeyboardMarkup(row_width=2)
     
+    # แสดงสถานะรอบเวลาซิงค์กับแท่ง M1
     current_time_str = get_thai_time().strftime('%H:%M:%S')
-    markup.add(InlineKeyboardButton(f"🟢 [ LIVE REFRESH: {current_time_str} ]", callback_data="do_nothing"))
+    markup.add(InlineKeyboardButton(f"🟢 [ M1 SYNC REFRESH: {current_time_str} ]", callback_data="do_nothing"))
     
     markup.add(
         InlineKeyboardButton("📊 เช็คสถิติระบบ", callback_data="menu_stats"),
         InlineKeyboardButton("🔄 รีเซ็ตสถิติ", callback_data="menu_reset")
     )
     
-    # คำนวณความมั่นใจจริงรายคู่แบบไม่ล็อกลำดับ
     for sym, label in SYMBOLS.items():
         pure_name = label.split(' ', 1)[1] if ' ' in label else label
         _, _, _, conf = omega_god_5000_layers_analysis(sym)
         
-        # แสดงผลสีเขียวเฉพาะคู่ที่กราฟคำนวณผ่านเกณฑ์ 85% จริงเท่านั้น
         if conf >= 85.0:
             colored_label = f"🟢 {pure_name} [WIN 99%]"
         else:
@@ -234,7 +229,7 @@ def get_stats_text(chat_id):
     current_step = user_martingale_step.get(chat_id, 1)
 
     text = (
-        f"🔥 **[ REAL ANALYTICS OMEGA-GOD // STATS ]** 🔥\n\n"
+        f"🔥 **[ M1 SYNC OMEGA-GOD // STATS ]** 🔥\n\n"
         f"🎯 **ปฏิบัติการปัจจุบัน: ลุย `[ ไม้ที่ {current_step} ]`**\n\n"
         f"🏆 ชนะไม้ 1: `[ {st['win1']} ]` ({win1_rate:.2f}%)\n"
         f"🥈 ชนะไม้ 2: `[ {st['win2']} ]`\n"
@@ -256,33 +251,38 @@ def get_stats_text(chat_id):
     return text + symbol_breakdown
 
 # ==========================================
-# BACKGROUND WORKER: REAL-TIME REFRESH
+# BACKGROUND WORKER: SYNC AT SECOND 30 OF EVERY CANDLE
 # ==========================================
 def background_live_refresher():
+    """รีเฟรชเฉพาะเมื่อเวลาเดินมาถึงวินาทีที่ 30 ของทุกนาที (ให้สอดคล้องกับแท่ง M1)"""
+    last_refreshed_minute = -1
     while True:
         try:
-            for chat_id, info in list(user_last_message.items()):
-                try:
-                    msg_id = info.get("message_id")
-                    symbol = info.get("symbol")
-                    fixed_text = info.get("fixed_text")
-                    if not msg_id or not symbol or not fixed_text:
-                        continue
+            now = get_thai_time()
+            if now.second == 30 and now.minute != last_refreshed_minute:
+                last_refreshed_minute = now.minute
+                for chat_id, info in list(user_last_message.items()):
+                    try:
+                        msg_id = info.get("message_id")
+                        symbol = info.get("symbol")
+                        fixed_text = info.get("fixed_text")
+                        if not msg_id or not symbol or not fixed_text:
+                            continue
 
-                    markup = build_dynamic_menu_keyboard(symbol)
-                    bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=msg_id,
-                        text=fixed_text,
-                        reply_markup=markup,
-                        parse_mode="Markdown"
-                    )
-                except Exception as sub_e:
-                    pass
-            time.sleep(10)
+                        markup = build_dynamic_menu_keyboard(symbol)
+                        bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=msg_id,
+                            text=fixed_text,
+                            reply_markup=markup,
+                            parse_mode="Markdown"
+                        )
+                    except Exception as sub_e:
+                        pass
+            time.sleep(0.5)
         except Exception as e:
             print(f"⚠️ Background worker error: {e}")
-            time.sleep(5)
+            time.sleep(1)
 
 # ==========================================
 # TELEGRAM BOT HANDLERS WITH PASSWORD AUTH
@@ -305,7 +305,7 @@ def register_email(message):
             user_martingale_step[message.chat.id] = 1
             bot.reply_to(
                 message, 
-                f"🔥 **REAL ANALYTICS AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
+                f"🔥 **M1 SYNC AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
                 reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"),
                 parse_mode="Markdown"
             )
@@ -325,14 +325,14 @@ def send_welcome(message):
     if not email or not password or not check_user_approved(email, password):
         bot.send_message(
             chat_id, 
-            "🔥 **TITAN BEAM // REAL ANALYTICS CORE** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
+            "🔥 **TITAN BEAM // M1 SYNC CORE** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
             parse_mode="Markdown"
         )
         return
 
     bot.send_message(
         chat_id, 
-        "🔥 **TITAN BEAM // REAL ANALYTICS CORE** 🔥\nเปิดระบบคำนวณกราฟจริงรายคู่ (ไม่มีการล็อกหรือเรียงลำดับซ้ำ):", 
+        "🔥 **TITAN BEAM // M1 SYNC CORE** 🔥\nเปิดระบบซิงค์รีเฟรชเฉพาะวินาทีที่ 30 ของทุกแท่งเทียน M1:", 
         reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"), 
         parse_mode="Markdown"
     )
@@ -371,7 +371,7 @@ def handle_all(call):
     if chat_id not in user_martingale_step: user_martingale_step[chat_id] = 1
 
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ ระบบกำลังวิเคราะห์กราฟจริงเรียลไทม์สดๆ ทุกรอบ")
+        bot.answer_callback_query(call.id, "⚡ ระบบซิงค์คำนวณตามรอบแท่งเทียน M1 ทุกวินาทีที่ 30")
         return
 
     if call.data == "menu_stats":
@@ -439,13 +439,13 @@ def handle_all(call):
         direction_icon = "🟢 CALL (ขึ้น)" if direction == 'CALL' else "🔴 PUT (ลง)"
 
         fixed_signal_text = (
-            f"🔥 **[ REAL SIGNAL LOCK ]** 🔥\n"
+            f"🔥 **[ M1 SYNC SIGNAL LOCK ]** 🔥\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 **คำสั่ง: ลุยออเดอร์ `[ ไม้ที่ {current_step} ]`**\n"
             f"💲📊 สินทรัพย์: `{symbol_label}`\n"
             f"💎 Timeframe: `M1` | Win Rate: `{sym_wr:.2f}%`\n"
             f"⏱️ **เป้าหมายเวลาเข้าออเดอร์: `{target_time_str}`**\n\n"
-            f"🛡️ **[ REAL TELEMETRY ]**\n"
+            f"🛡️ **[ M1 SYNC TELEMETRY ]**\n"
             f"• {tech_used}\n"
             f"• {zone_status}\n"
             f"• {ttz_desc}\n"
@@ -468,7 +468,7 @@ def handle_all(call):
 # MAIN EXECUTION LOOP & THREADING
 # ==========================================
 print("--------------------------------------------------")
-print("🔥 TITAN REAL ANALYTICS CORE เริ่มต้นระบบคำนวณกราฟจริง...")
+print("🔥 TITAN M1 SYNC CORE เริ่มต้นระบบซิงค์วินาทีที่ 30 ของแท่งเทียน...")
 print("--------------------------------------------------")
 
 refresher_thread = threading.Thread(target=background_live_refresher, daemon=True)
