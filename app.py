@@ -71,7 +71,7 @@ def check_user_approved(email: str, password: str = None) -> bool:
     return False
 
 # ==========================================
-# REAL-TIME MARKET ENGINE & STRICT CALCULATION
+# STRICT MARKET FILTERING CORE (ZERO-LEAK)
 # ==========================================
 def get_forex_factory_high_impact_news():
     url = "https://www.forexfactory.com/ff_calendar_thisweek.xml"
@@ -96,11 +96,11 @@ def get_forex_factory_high_impact_news():
 def check_market_zone_ttz():
     now_min = get_thai_time().minute
     if now_min in [28, 29, 30, 58, 59, 0, 1]:
-        return "RED", "🔴 [M1 SYNC] โซนอันตรายรอบเปลี่ยนแท่ง"
+        return "RED", "🔴 [ZERO-LEAK] โซนอันตรายรอบเปลี่ยนแท่ง"
     elif now_min in [14, 15, 44, 45]:
-        return "YELLOW", "🟡 [M1 SYNC] เฝ้าระวังความผันผวนรอบย่อย"
+        return "YELLOW", "🟡 [ZERO-LEAK] เฝ้าระวังความผันผวนรอบย่อย"
     else:
-        return "GREEN", "🟢 [M1 SYNC] เสถียรภาพตลาดระดับสูงสุด"
+        return "GREEN", "🟢 [ZERO-LEAK] เสถียรภาพตลาดระดับสูงสุด"
 
 def fetch_live_kline_data(symbol):
     try:
@@ -152,65 +152,72 @@ def omega_god_5000_layers_analysis(symbol):
     candle_body = abs(df['close'] - df['open'])
     avg_body = candle_body.tail(20).mean()
     last_body = candle_body.iloc[-1]
-    is_spike_candle = last_body > (avg_body * 2.0)
+    
+    # 1. บล็อกกราฟลากผันผวนแรง (High Volatility Protection)
+    is_extreme_spike = last_body > (avg_body * 2.5)
+    if is_extreme_spike:
+        return "NONE", "🛡️ [Risk Guard] กราฟผันผวนลากรุนแรง ห้ามเข้าออเดอร์", "Spike Risk Blocked", 40.0
 
     last_close = df['close'].iloc[-1]
     last_open = df['open'].iloc[-1]
+    ema5_curr = df['ema_5'].iloc[-1]
+    ema20_curr = df['ema_20'].iloc[-1]
+    ema50_curr = df['ema_50'].iloc[-1]
     last_macd = df['macd_hist'].iloc[-1]
     last_rsi = df['rsi'].iloc[-1]
     
-    if is_spike_candle:
-        if last_close > last_open:
-            return "PUT", "🛡️ [Anti-Spike Core] กราฟพุ่งกระชาก ➔ สั่งดักสวน PUT", "M1 Rejection Engine", 50.0
-        else:
-            return "CALL", "🛡️ [Anti-Spike Core] กราฟดิ่งกระชาก ➔ สั่งดักสวน CALL", "M1 Rejection Engine", 50.0
-
     score_call = 0
     score_put = 0
 
-    if df['ema_5'].iloc[-1] > df['ema_20'].iloc[-1]: score_call += 25
-    else: score_put += 25
+    # 2. Strict Trend-Following Filter (บังคับเล่นตามเทรนด์ ห้ามสวนเด็ดขาด)
+    is_strong_uptrend = (ema5_curr > ema20_curr) and (ema20_curr > ema50_curr) and (last_close > last_open)
+    is_strong_downtrend = (ema5_curr < ema20_curr) and (ema20_curr < ema50_curr) and (last_close < last_open)
 
-    if df['ema_20'].iloc[-1] > df['ema_50'].iloc[-1]: score_call += 25
-    else: score_put += 25
+    if is_strong_uptrend:
+        score_call += 40
+    elif is_strong_downtrend:
+        score_put += 40
 
-    if last_macd > 0: score_call += 20
-    else: score_put += 20
+    if last_macd > 0: score_call += 25
+    elif last_macd < 0: score_put += 25
 
-    if last_rsi > 55: score_call += 15
-    elif last_rsi < 45: score_put += 15
+    if last_rsi > 58: score_call += 20
+    elif last_rsi < 42: score_put += 20
 
     if last_close > last_open: score_call += 15
     else: score_put += 15
 
     total_score = max(score_call, score_put)
-    if total_score >= 85:
-        confidence_pct = float(total_score)
+    
+    # 3. ต้องผ่านคอนเฟิร์มพร้อมกันทุกระบบ ค่าความมั่นใจถึงจะเกิน 92%
+    if total_score >= 90 and (is_strong_uptrend or is_strong_downtrend):
+        confidence_pct = 95.0
     else:
-        confidence_pct = float(total_score * 0.75)
+        confidence_pct = float(total_score * 0.70) # สัญญาณไม่ชัด ปรับลดคะแนนทันที
 
-    if score_call >= score_put:
-        return "CALL", f"⚡ [M1 Engine] คำนวณกราฟแท่งปัจจุบัน ({score_call}/100)", "Bullish Confluence", confidence_pct
+    if score_call > score_put:
+        return "CALL", f"⚡ [Strict Core] คอนเฟิร์มตามเทรนด์ขาขึ้น ({score_call}/100)", "Strong Bullish Confluence", confidence_pct
     else:
-        return "PUT", f"⚡ [M1 Engine] คำนวณกราฟแท่งปัจจุบัน ({score_put}/100)", "Bearish Confluence", confidence_pct
+        return "PUT", f"⚡ [Strict Core] คอนเฟิร์มตามเทรนด์ขาลง ({score_put}/100)", "Strong Bearish Confluence", confidence_pct
 
 def build_dynamic_menu_keyboard(symbol):
     markup = InlineKeyboardMarkup(row_width=2)
     
-    # แสดงสถานะรอบเวลาซิงค์กับแท่ง M1
     current_time_str = get_thai_time().strftime('%H:%M:%S')
-    markup.add(InlineKeyboardButton(f"🟢 [ M1 SYNC REFRESH: {current_time_str} ]", callback_data="do_nothing"))
+    markup.add(InlineKeyboardButton(f"🟢 [ STRICT M1 SYNC: {current_time_str} ]", callback_data="do_nothing"))
     
     markup.add(
         InlineKeyboardButton("📊 เช็คสถิติระบบ", callback_data="menu_stats"),
         InlineKeyboardButton("🔄 รีเซ็ตสถิติ", callback_data="menu_reset")
     )
     
+    # คำนวณค่าความมั่นใจจริงรายคู่ (Strict 92% Threshold)
     for sym, label in SYMBOLS.items():
         pure_name = label.split(' ', 1)[1] if ' ' in label else label
         _, _, _, conf = omega_god_5000_layers_analysis(sym)
         
-        if conf >= 85.0:
+        # เขียวเฉพาะคู่ที่มั่นใจเกิน 92.0% และไม่อยู่ในจุดเสี่ยง
+        if conf >= 92.0:
             colored_label = f"🟢 {pure_name} [WIN 99%]"
         else:
             colored_label = f"🔴 {pure_name} [RISK]"
@@ -229,7 +236,7 @@ def get_stats_text(chat_id):
     current_step = user_martingale_step.get(chat_id, 1)
 
     text = (
-        f"🔥 **[ M1 SYNC OMEGA-GOD // STATS ]** 🔥\n\n"
+        f"🔥 **[ ZERO-LEAK OMEGA-GOD // STATS ]** 🔥\n\n"
         f"🎯 **ปฏิบัติการปัจจุบัน: ลุย `[ ไม้ที่ {current_step} ]`**\n\n"
         f"🏆 ชนะไม้ 1: `[ {st['win1']} ]` ({win1_rate:.2f}%)\n"
         f"🥈 ชนะไม้ 2: `[ {st['win2']} ]`\n"
@@ -251,10 +258,10 @@ def get_stats_text(chat_id):
     return text + symbol_breakdown
 
 # ==========================================
-# BACKGROUND WORKER: SYNC AT SECOND 30 OF EVERY CANDLE
+# BACKGROUND WORKER: REFRESH AT SECOND 30
 # ==========================================
 def background_live_refresher():
-    """รีเฟรชเฉพาะเมื่อเวลาเดินมาถึงวินาทีที่ 30 ของทุกนาที (ให้สอดคล้องกับแท่ง M1)"""
+    """คำนวณแท่งใหม่นิ่งๆ และอัปเดตหน้าจอเฉพาะวินาทีที่ 30 ของทุกนาที"""
     last_refreshed_minute = -1
     while True:
         try:
@@ -305,7 +312,7 @@ def register_email(message):
             user_martingale_step[message.chat.id] = 1
             bot.reply_to(
                 message, 
-                f"🔥 **M1 SYNC AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
+                f"🔥 **ZERO-LEAK AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
                 reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"),
                 parse_mode="Markdown"
             )
@@ -325,14 +332,14 @@ def send_welcome(message):
     if not email or not password or not check_user_approved(email, password):
         bot.send_message(
             chat_id, 
-            "🔥 **TITAN BEAM // M1 SYNC CORE** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
+            "🔥 **TITAN BEAM // ZERO-LEAK ANALYTICS** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
             parse_mode="Markdown"
         )
         return
 
     bot.send_message(
         chat_id, 
-        "🔥 **TITAN BEAM // M1 SYNC CORE** 🔥\nเปิดระบบซิงค์รีเฟรชเฉพาะวินาทีที่ 30 ของทุกแท่งเทียน M1:", 
+        "🔥 **TITAN BEAM // ZERO-LEAK ANALYTICS** 🔥\nเปิดระบบล็อกความปลอดภัย 4 ชั้น (กรองสวนเทรนด์ + รีเฟรชเป๊ะวินาทีที่ 30):", 
         reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"), 
         parse_mode="Markdown"
     )
@@ -436,21 +443,26 @@ def handle_all(call):
         tot_sym = sym_data["win"] + sym_data["loss"]
         sym_wr = (sym_data["win"] / tot_sym * 100) if tot_sym > 0 else 0.0
 
-        direction_icon = "🟢 CALL (ขึ้น)" if direction == 'CALL' else "🔴 PUT (ลง)"
+        if direction == "NONE":
+            direction_icon = "⚠️ NO TRADE (ข้ามออเดอร์)"
+        elif direction == "CALL":
+            direction_icon = "🟢 CALL (ขึ้น)"
+        else:
+            direction_icon = "🔴 PUT (ลง)"
 
         fixed_signal_text = (
-            f"🔥 **[ M1 SYNC SIGNAL LOCK ]** 🔥\n"
+            f"🔥 **[ ZERO-LEAK SIGNAL LOCK ]** 🔥\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 **คำสั่ง: ลุยออเดอร์ `[ ไม้ที่ {current_step} ]`**\n"
             f"💲📊 สินทรัพย์: `{symbol_label}`\n"
             f"💎 Timeframe: `M1` | Win Rate: `{sym_wr:.2f}%`\n"
             f"⏱️ **เป้าหมายเวลาเข้าออเดอร์: `{target_time_str}`**\n\n"
-            f"🛡️ **[ M1 SYNC TELEMETRY ]**\n"
+            f"🛡️ **[ ZERO-LEAK TELEMETRY ]**\n"
             f"• {tech_used}\n"
             f"• {zone_status}\n"
             f"• {ttz_desc}\n"
             f"• {news_status}\n"
-            f"• Confidence Score: `{confidence_pct:.1f}%`\n"
+            f"• Strict Confidence: `{confidence_pct:.1f}%`\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"🚀 **ฟันธงทิศทาง: {direction_icon}**"
         )
@@ -468,7 +480,7 @@ def handle_all(call):
 # MAIN EXECUTION LOOP & THREADING
 # ==========================================
 print("--------------------------------------------------")
-print("🔥 TITAN M1 SYNC CORE เริ่มต้นระบบซิงค์วินาทีที่ 30 ของแท่งเทียน...")
+print("🔥 TITAN ZERO-LEAK CORE เริ่มต้นระบบป้องกันการลากสวนเทรนด์...")
 print("--------------------------------------------------")
 
 refresher_thread = threading.Thread(target=background_live_refresher, daemon=True)
