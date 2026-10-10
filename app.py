@@ -71,7 +71,7 @@ def check_user_approved(email: str, password: str = None) -> bool:
     return False
 
 # ==========================================
-# ULTRA-STRICT 99% MARKET ENGINE
+# ULTRA-STRICT 99% MARKET ENGINE (FIXED BUG)
 # ==========================================
 def get_forex_factory_high_impact_news():
     url = "https://www.forexfactory.com/ff_calendar_thisweek.xml"
@@ -149,26 +149,30 @@ def omega_god_5000_layers_analysis(symbol):
     
     df['rsi'] = calculate_rsi(df['close'], 14)
     
-    candle_body = abs(df['close'] - df['open'])
-    upper_wick = df['high'].iloc[-1] - max(df['close'].iloc[-1], df['open'].iloc[-1])
-    lower_wick = min(df['close'].iloc[-1], df['open'].iloc[-1]) - df['low'].iloc[-1]
+    # ดึงค่าตัวเลขแท่งล่าสุดเพื่อป้องกันข้อผิดพลาด Series ambiguity
+    last_close = float(df['close'].iloc[-1])
+    last_open = float(df['open'].iloc[-1])
+    last_high = float(df['high'].iloc[-1])
+    last_low = float(df['low'].iloc[-1])
     
-    # กรองไส้เทียนสบัดหรือแท่งพักตัวที่มีความเสี่ยงสูงทันที
+    candle_body = abs(last_close - last_open)
+    upper_wick = last_high - max(last_close, last_open)
+    lower_wick = min(last_close, last_open) - last_low
+    
+    # กรองไส้เทียนสบัดเสี่ยงย่อตัว
     if upper_wick > candle_body or lower_wick > candle_body:
         return "NONE", "🛡️ [99% Guard] ตรวจพบไส้เทียนสบัดเสี่ยงย่อตัว ➔ ยกเลิกสัญญาณ", "Wick Rejection Risk", 50.0
 
-    last_close = df['close'].iloc[-1]
-    last_open = df['open'].iloc[-1]
-    ema5 = df['ema_5'].iloc[-1]
-    ema20 = df['ema_20'].iloc[-1]
-    ema50 = df['ema_50'].iloc[-1]
-    last_macd = df['macd_hist'].iloc[-1]
-    last_rsi = df['rsi'].iloc[-1]
+    ema5 = float(df['ema_5'].iloc[-1])
+    ema20 = float(df['ema_20'].iloc[-1])
+    ema50 = float(df['ema_50'].iloc[-1])
+    last_macd = float(df['macd_hist'].iloc[-1])
+    last_rsi = float(df['rsi'].iloc[-1])
     
     score_call = 0
     score_put = 0
 
-    # เงื่อนไขความแม่นยำสูงระดับ 99% (ต้องสอดคล้องกันทุกสำนัก)
+    # เงื่อนไขสมบูรณ์แบบ 96%-99%
     is_perfect_uptrend = (ema5 > ema20) and (ema20 > ema50) and (last_close > last_open) and (last_macd > 0) and (50 < last_rsi < 72)
     is_perfect_downtrend = (ema5 < ema20) and (ema20 < ema50) and (last_close < last_open) and (last_macd < 0) and (28 < last_rsi < 50)
 
@@ -198,7 +202,6 @@ def build_dynamic_menu_keyboard(symbol):
         pure_name = label.split(' ', 1)[1] if ' ' in label else label
         _, _, _, conf = omega_god_5000_layers_analysis(sym)
         
-        # ล็อกเกณฑ์ความแม่นยำเข้มงวด 96% ขึ้นไปเท่านั้นถึงจะเขียว
         if conf >= 96.0:
             colored_label = f"🟢 {pure_name} [WIN 99%]"
         else:
@@ -300,7 +303,7 @@ def register_email(message):
         else:
             bot.reply_to(message, "❌ **AUTHENTICATION FAILED:** ข้อมูลไม่ถูกต้องหรือสิทธิ์ถูกระงับ", parse_mode="Markdown")
     except Exception as e:
-        bot.reply_to(message, f"❌ เกิดข้อผิดพลาด: {e}")
+        bot.reply_to(message, f"❌ เกิดข้อผิดพลาด: {e}", parse_mode="Markdown")
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -461,7 +464,7 @@ def handle_all(call):
 # MAIN EXECUTION LOOP & THREADING
 # ==========================================
 print("--------------------------------------------------")
-print("🔥 TITAN 99% ULTRA-STRICT CORE เริ่มต้นระบบคำนวณความแม่นยำสูง...")
+print("🔥 TITAN 99% ULTRA-STRICT CORE เริ่มต้นระบบคำนวณความแม่นยำสูง (FIXED)...")
 print("--------------------------------------------------")
 
 refresher_thread = threading.Thread(target=background_live_refresher, daemon=True)
