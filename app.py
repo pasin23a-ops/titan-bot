@@ -21,7 +21,7 @@ user_stats = {}
 symbol_stats = {}
 user_martingale_step = {}
 user_creds = {}
-user_last_message = {}  # เก็บข้อมูลข้อความล่าสุดของแต่ละ Chat ID เพื่อใช้อัปเดตอัตโนมัติ
+user_last_message = {}
 
 SYMBOLS = {
     "DYDXUSDT": "⚡ DYDX (OTC)",
@@ -158,15 +158,15 @@ def omega_god_5000_layers_analysis(symbol):
     
     if dist_res < 0.00015:
         if last_close > last_open and df['std_hist'].iloc[-1] > 0:
-            return "CALL", "⚡ [5000-Layer Omega-God] ตรวจพบแรงทะลุต้านรุนแรง ➔ ระบบสลับตามน้ำ CALL", "Omega-God Breakout Follow Engine", 98.5
+            return "CALL", "⚡ [5000-Layer Target Engine] โมเมนตัมพุ่งทะลุต้าน ➔ สั่ง CALL", "Omega-God Breakout Predictor", 98.5
         else:
-            return "PUT", "🛡️ [5000-Layer Omega-God] ชนแนวต้านเหล็กกล้าสมบูรณ์ ➔ ระบบสั่งดัก PUT", "Omega-God Resistance Rejection Matrix", 98.5
+            return "PUT", "🛡️ [5000-Layer Target Engine] ชนแนวต้านแข็งแกร่ง ➔ สั่งดัก PUT", "Omega-God Resistance Rejection Matrix", 98.5
             
     if dist_sup < 0.00015:
         if last_close < last_open and df['std_hist'].iloc[-1] < 0:
-            return "PUT", "⚡ [5000-Layer Omega-God] ตรวจพบแรงทะลุรับรุนแรง ➔ ระบบสลับตามน้ำ PUT", "Omega-God Breakdown Follow Engine", 98.5
+            return "PUT", "⚡ [5000-Layer Target Engine] โมเมนตัมดิ่งทะลุรับ ➔ สั่ง PUT", "Omega-God Breakdown Predictor", 98.5
         else:
-            return "CALL", "🛡️ [5000-Layer Omega-God] ชนแนวรับเหล็กกล้าสมบูรณ์ ➔ ระบบสั่งดัก CALL", "Omega-God Support Rejection Matrix", 98.5
+            return "CALL", "🛡️ [5000-Layer Target Engine] ชนแนวรับแข็งแกร่ง ➔ สั่งดัก CALL", "Omega-God Support Rejection Matrix", 98.5
 
     if df['ema_2'].iloc[-1] > df['ema_10'].iloc[-1]: score_call += 500
     else: score_put += 500
@@ -197,22 +197,22 @@ def omega_god_5000_layers_analysis(symbol):
     confidence_pct = (diff_score / total_score * 100) if total_score > 0 else 50.0
 
     if score_call >= score_put:
-        return "CALL", f"⚡ [5000-Layer Omega-God] ผ่านเกณฑ์สูงสุดสมบูรณ์ ({score_call}/5000)", "Omega-God Absolute Bullish Confluence", confidence_pct
+        return "CALL", f"⚡ [5000-Layer Target Engine] คำนวณสมบูรณ์ ({score_call}/5000)", "Omega-God Bullish Confluence", confidence_pct
     else:
-        return "PUT", f"⚡ [5000-Layer Omega-God] ผ่านเกณฑ์สูงสุดสมบูรณ์ ({score_put}/5000)", "Omega-God Absolute Bearish Confluence", confidence_pct
+        return "PUT", f"⚡ [5000-Layer Target Engine] คำนวณสมบูรณ์ ({score_put}/5000)", "Omega-God Bearish Confluence", confidence_pct
 
-def build_dynamic_menu_keyboard():
+def build_dynamic_menu_keyboard(symbol):
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
+        InlineKeyboardButton("🏆 ชนะไม้ 1", callback_data=f"res_win1_{symbol}"),
+        InlineKeyboardButton("🏆 ชนะไม้ 2", callback_data=f"res_win2_{symbol}"),
+        InlineKeyboardButton("🏆 ชนะไม้ 3", callback_data=f"res_win3_{symbol}"),
+        InlineKeyboardButton("❌ แพ้ (ขยับไม้ถัดไป)", callback_data=f"res_loss_{symbol}"),
         InlineKeyboardButton("📊 เช็คสถิติระบบ", callback_data="menu_stats"),
         InlineKeyboardButton("🔄 รีเซ็ตสถิติ", callback_data="menu_reset")
     )
     
-    symbol_confidences = {}
-    for sym in SYMBOLS.keys():
-        _, _, _, conf_pct = omega_god_5000_layers_analysis(sym)
-        symbol_confidences[sym] = conf_pct
-
+    symbol_confidences = {s: omega_god_5000_layers_analysis(s)[3] for s in SYMBOLS.keys()}
     best_sym = max(symbol_confidences, key=symbol_confidences.get)
 
     for sym, label in SYMBOLS.items():
@@ -260,10 +260,10 @@ def get_stats_text(chat_id):
     return text + symbol_breakdown
 
 # ==========================================
-# BACKGROUND WORKER: AUTO-REFRESH LIVE CANDLE
+# BACKGROUND WORKER: AUTO-REFRESH BUTTONS ONLY
 # ==========================================
 def background_live_refresher():
-    """อัปเดตหน้าจอข้อความและปุ่มกดให้เปลี่ยนสีตามแท่งใหม่โดยอัตโนมัติทุกๆ นาที"""
+    """อัปเดตเฉพาะปุ่มกดเปลี่ยนสี 🟢/🔴 เท่านั้น ไม่แตะต้องข้อความออเดอร์หลักเด็ดขาด"""
     while True:
         try:
             now_sec = datetime.datetime.now().second
@@ -272,76 +272,18 @@ def background_live_refresher():
                     try:
                         msg_id = info.get("message_id")
                         symbol = info.get("symbol")
-                        if not msg_id or not symbol:
+                        fixed_text = info.get("fixed_text")
+                        if not msg_id or not symbol or not fixed_text:
                             continue
-                        
-                        direction, zone_status, tech_used, _ = omega_god_5000_layers_analysis(symbol)
-                        symbol_label = SYMBOLS.get(symbol, symbol)
-                        current_step = user_martingale_step.get(chat_id, 1)
-                        
-                        now_thai = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
-                        target_time = (now_thai + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
-                        target_time_str = target_time.strftime('%H:%M')
 
-                        sym_data = symbol_stats.get(chat_id, {}).get(symbol, {"win": 0, "loss": 0})
-                        tot_sym = sym_data["win"] + sym_data["loss"]
-                        sym_wr = (sym_data["win"] / tot_sym * 100) if tot_sym > 0 else 0.0
+                        # สร้างปุ่มคู่เงินสีใหม่เรียลไทม์
+                        markup = build_dynamic_menu_keyboard(symbol)
 
-                        # คำนวณหาคู่ที่เป็นสีเขียว (มั่นใจสูงสุด) ทั้งหมดในนาทีปัจจุบันเพื่อแจ้งเตือนที่หัวข้อ
-                        symbol_confs = {s: omega_god_5000_layers_analysis(s)[3] for s in SYMBOLS.keys()}
-                        b_sym = max(symbol_confs, key=symbol_confidences.get) if 'symbol_confidences' in locals() else max(symbol_confs, key=symbol_confs.get)
-                        
-                        green_list = []
-                        for s_key, c_val in symbol_confidences.items() if 'symbol_confidences' in locals() else symbol_confs.items():
-                            if c_val >= 95.0 or s_key == b_sym:
-                                green_list.append(SYMBOLS.get(s_key, s_key))
-                        
-                        top_green_text = "\n".join([f"• {g}" for g in green_list[:3]])
-
-                        markup = InlineKeyboardMarkup(row_width=2)
-                        markup.add(
-                            InlineKeyboardButton("🏆 ชนะไม้ 1", callback_data=f"res_win1_{symbol}"),
-                            InlineKeyboardButton("🏆 ชนะไม้ 2", callback_data=f"res_win2_{symbol}"),
-                            InlineKeyboardButton("🏆 ชนะไม้ 3", callback_data=f"res_win3_{symbol}"),
-                            InlineKeyboardButton("❌ แพ้ (ขยับไม้ถัดไป)", callback_data=f"res_loss_{symbol}"),
-                            InlineKeyboardButton("📊 เช็คสถิติระบบ", callback_data="menu_stats"),
-                            InlineKeyboardButton("🔄 รีเซ็ตสถิติ", callback_data="menu_reset")
-                        )
-                        
-                        for sym_key, label in SYMBOLS.items():
-                            pure_name = label.split(' ', 1)[1] if ' ' in label else label
-                            conf = symbol_confs[sym_key]
-                            c_label = f"🟢 {pure_name} [WIN 99%]" if (conf >= 95.0 or sym_key == b_sym) else f"🔴 {pure_name} [RISK]"
-                            markup.add(InlineKeyboardButton(c_label, callback_data=f"analyze_{sym_key}"))
-
-                        direction_icon = "🟢 CALL (ขึ้น)" if direction == 'CALL' else "🔴 PUT (ลง)"
-                        ttz_code, ttz_desc = check_market_zone_ttz()
-                        ff_news = get_forex_factory_high_impact_news()
-                        news_status = f"🌐 Forex Factory: ตรวจพบข่าวกล่องแดง {len(ff_news)} รายการ" if ff_news else "🌐 Forex Factory: สภาวะเสถียร (ไร้ข่าวแดงรุนแรง)"
-
-                        updated_text = (
-                            f"🔥 **[ 5000-LAYER OMEGA-GOD SIGNAL (LIVE) ]** 🔥\n"
-                            f"━━━━━━━━━━━━━━━━━━━\n"
-                            f"🟢 **[ คู่สีเขียวความมั่นใจสูงสุดประจำนาทีนี้ ]**\n"
-                            f"{top_green_text}\n"
-                            f"━━━━━━━━━━━━━━━━━━━\n"
-                            f"🎯 **คำสั่ง: ลุยออเดอร์ `[ ไม้ที่ {current_step} ]`**\n"
-                            f"💲📊 สินทรัพย์กำลังดู: `{symbol_label}`\n"
-                            f"💎 Timeframe: `M1` | Win Rate: `{sym_wr:.2f}%`\n"
-                            f"⏱️ เป้าหมายเวลา: `{target_time_str}`\n\n"
-                            f"🛡️ **[ TELEMETRY ]**\n"
-                            f"• {tech_used}\n"
-                            f"• {zone_status}\n"
-                            f"• {ttz_desc}\n"
-                            f"• {news_status}\n"
-                            f"━━━━━━━━━━━━━━━━━━━\n"
-                            f"🚀 **ฟันธงทิศทาง: {direction_icon}**"
-                        )
-                        
+                        # อัปเดตเฉพาะปุ่มกด โดยคงข้อความหลักเดิมไว้ 100%
                         bot.edit_message_text(
                             chat_id=chat_id,
                             message_id=msg_id,
-                            text=updated_text,
+                            text=fixed_text,
                             reply_markup=markup,
                             parse_mode="Markdown"
                         )
@@ -375,8 +317,8 @@ def register_email(message):
             user_martingale_step[message.chat.id] = 1
             bot.reply_to(
                 message, 
-                f"🔥 **5000-LAYER OMEGA-GOD AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบเรียลไทม์แท่งต่อแท่งสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
-                reply_markup=build_dynamic_menu_keyboard(),
+                f"🔥 **5000-LAYER OMEGA-GOD AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
+                reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"),
                 parse_mode="Markdown"
             )
         else:
@@ -402,8 +344,8 @@ def send_welcome(message):
 
     bot.send_message(
         chat_id, 
-        "🔥 **TITAN BEAM // 5000-LAYER OMEGA-GOD CORE** 🔥\nเปิดระบบเกราะกรองความมั่นใจ 95% แท่งต่อแท่ง พร้อมประมวลผลคำสั่งแล้ว เลือกคู่สินทรัพย์ที่ต้องการลุยได้เลย:", 
-        reply_markup=build_dynamic_menu_keyboard(), 
+        "🔥 **TITAN BEAM // 5000-LAYER OMEGA-GOD CORE** 🔥\nเปิดระบบคำนวณ 5,000 ชั้น พร้อมล็อกสัญญาณออเดอร์แล้ว เลือกคู่สินทรัพย์ที่ต้องการลุยได้เลย:", 
+        reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"), 
         parse_mode="Markdown"
     )
 
@@ -502,39 +444,16 @@ def handle_all(call):
         tot_sym = sym_data["win"] + sym_data["loss"]
         sym_wr = (sym_data["win"] / tot_sym * 100) if tot_sym > 0 else 0.0
 
-        symbol_confs = {s: omega_god_5000_layers_analysis(s)[3] for s in SYMBOLS.keys()}
-        b_sym = max(symbol_confs, key=symbol_confs.get)
-        
-        green_list = [SYMBOLS.get(s_key, s_key) for s_key, c_val in symbol_confs.items() if (c_val >= 95.0 or s_key == b_sym)]
-        top_green_text = "\n".join([f"• {g}" for g in green_list[:3]])
-
-        markup = InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            InlineKeyboardButton("🏆 ชนะไม้ 1", callback_data=f"res_win1_{symbol}"),
-            InlineKeyboardButton("🏆 ชนะไม้ 2", callback_data=f"res_win2_{symbol}"),
-            InlineKeyboardButton("🏆 ชนะไม้ 3", callback_data=f"res_win3_{symbol}"),
-            InlineKeyboardButton("❌ แพ้ (ขยับไม้ถัดไป)", callback_data=f"res_loss_{symbol}"),
-            InlineKeyboardButton("📊 เช็คสถิติระบบ", callback_data="menu_stats"),
-            InlineKeyboardButton("🔄 รีเซ็ตสถิติ", callback_data="menu_reset")
-        )
-        for sym, label in SYMBOLS.items():
-            pure_name = label.split(' ', 1)[1] if ' ' in label else label
-            conf = symbol_confs[sym]
-            c_label = f"🟢 {pure_name} [WIN 99%]" if (conf >= 95.0 or sym == b_sym) else f"🔴 {pure_name} [RISK]"
-            markup.add(InlineKeyboardButton(c_label, callback_data=f"analyze_{sym}"))
-
         direction_icon = "🟢 CALL (ขึ้น)" if direction == 'CALL' else "🔴 PUT (ลง)"
 
-        signal_text = (
-            f"🔥 **[ 5000-LAYER OMEGA-GOD SIGNAL (LIVE) ]** 🔥\n"
-            f"━━━━━━━━━━━━━━━━━━━\n"
-            f"🟢 **[ คู่สีเขียวความมั่นใจสูงสุดประจำนาทีนี้ ]**\n"
-            f"{top_green_text}\n"
+        # ล็อกข้อความฟันธงทิศทางหลักนี้ไว้ถาวร
+        fixed_signal_text = (
+            f"🔥 **[ 5000-LAYER SIGNAL LOCK ]** 🔥\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 **คำสั่ง: ลุยออเดอร์ `[ ไม้ที่ {current_step} ]`**\n"
-            f"💲📊 สินทรัพย์กำลังดู: `{symbol_label}`\n"
+            f"💲📊 สินทรัพย์: `{symbol_label}`\n"
             f"💎 Timeframe: `M1` | Win Rate: `{sym_wr:.2f}%`\n"
-            f"⏱️ เป้าหมายเวลา: `{target_time_str}`\n\n"
+            f"⏱️ **เป้าหมายเวลาเข้าออเดอร์: `{target_time_str}`**\n\n"
             f"🛡️ **[ TELEMETRY ]**\n"
             f"• {tech_used}\n"
             f"• {zone_status}\n"
@@ -544,14 +463,21 @@ def handle_all(call):
             f"🚀 **ฟันธงทิศทาง: {direction_icon}**"
         )
         
-        sent_msg = bot.send_message(chat_id, signal_text, reply_markup=markup, parse_mode="Markdown")
-        user_last_message[chat_id] = {"message_id": sent_msg.message_id, "symbol": symbol}
+        markup = build_dynamic_menu_keyboard(symbol)
+        sent_msg = bot.send_message(chat_id, fixed_signal_text, reply_markup=markup, parse_mode="Markdown")
+        
+        # บันทึกข้อความเดิมล็อกไว้ ไม่ให้เบื้องหลังเปลี่ยนเนื้อหา
+        user_last_message[chat_id] = {
+            "message_id": sent_msg.message_id, 
+            "symbol": symbol,
+            "fixed_text": fixed_signal_text
+        }
 
 # ==========================================
 # MAIN EXECUTION LOOP & THREADING
 # ==========================================
 print("--------------------------------------------------")
-print("🔥 TITAN 5000-LAYER OMEGA-GOD CORE เริ่มต้นระบบเรียลไทม์ Auto-Refresh...")
+print("🔥 TITAN 5000-LAYER OMEGA-GOD CORE เริ่มต้นระบบล็อกสัญญาณออเดอร์...")
 print("--------------------------------------------------")
 
 refresher_thread = threading.Thread(target=background_live_refresher, daemon=True)
