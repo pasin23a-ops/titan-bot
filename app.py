@@ -194,7 +194,6 @@ def omega_god_5000_layers_analysis(symbol):
 def build_dynamic_menu_keyboard(symbol):
     markup = InlineKeyboardMarkup(row_width=2)
     
-    # เพิ่มปุ่มแสดงเวลาอัปเดตสดๆ เพื่อให้เทเลแกรมยอมรีเฟชข้อความทุกรอบ
     current_time_str = get_thai_time().strftime('%H:%M:%S')
     markup.add(InlineKeyboardButton(f"🔄 [Live Refresh: {current_time_str}]", callback_data="do_nothing"))
     
@@ -469,7 +468,7 @@ print("--------------------------------------------------")
 refresher_thread = threading.Thread(target=background_live_refresher, daemon=True)
 refresher_thread.start()
 
-while true:
+while True:
     try:
         bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception as e:
