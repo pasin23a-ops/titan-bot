@@ -23,6 +23,9 @@ user_martingale_step = {}
 user_creds = {}
 user_last_message = {}
 
+# 🔒 MEMORY SYSTEM: ล็อกค่าวิเคราะห์ประจำแท่ง ป้องกันคำนวณใหม่ตอนกด
+market_analysis_cache = {}
+
 SYMBOLS = {
     "DYDXUSDT": "⚡ DYDX (OTC)",
     "XAUUSDT": "👑 XAUUSD (OTC)",
@@ -71,7 +74,7 @@ def check_user_approved(email: str, password: str = None) -> bool:
     return False
 
 # ==========================================
-# ABSOLUTE 94% MARKET ENGINE
+# MARKET ENGINE & KLINE FETCHING
 # ==========================================
 def get_forex_factory_high_impact_news():
     url = "https://www.forexfactory.com/ff_calendar_thisweek.xml"
@@ -96,11 +99,11 @@ def get_forex_factory_high_impact_news():
 def check_market_zone_ttz():
     now_min = get_thai_time().minute
     if now_min in [28, 29, 30, 58, 59, 0, 1]:
-        return "RED", "🔴 [ABS-UI] โซนอันตรายรอบเปลี่ยนแท่ง"
+        return "RED", "🔴 [FROZEN-STATE] โซนอันตรายรอบเปลี่ยนแท่ง"
     elif now_min in [14, 15, 44, 45]:
-        return "YELLOW", "🟡 [ABS-UI] เฝ้าระวังความผันผวนรอบย่อย"
+        return "YELLOW", "🟡 [FROZEN-STATE] เฝ้าระวังความผันผวนรอบย่อย"
     else:
-        return "GREEN", "🟢 [ABS-UI] เสถียรภาพตลาดระดับสูงสุด"
+        return "GREEN", "🟢 [FROZEN-STATE] เสถียรภาพตลาดระดับสูงสุด"
 
 def fetch_live_kline_data(symbol):
     try:
@@ -134,7 +137,8 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-def omega_god_5000_layers_analysis(symbol):
+def raw_market_analysis(symbol):
+    """คำนวณกราฟจริงจากตัวชีวัด เพื่อบันทึกเข้า Cache ประจำแท่ง"""
     df = fetch_live_kline_data(symbol)
     
     df['ema_5'] = df['close'].ewm(span=5, adjust=False).mean()
@@ -171,11 +175,28 @@ def omega_god_5000_layers_analysis(symbol):
     is_downtrend = (ema5 < ema20) and (last_close < last_open) and (last_macd < 0) and (last_rsi < 52)
 
     if is_uptrend:
-        return "CALL", "⚡ [Abs-UI] คอนเฟิร์มเทรนด์ขาขึ้น", "Bullish Confluence", 95.0
+        return "CALL", "⚡ [Frozen-State] คอนเฟิร์มเทรนด์ขาขึ้น", "Bullish Confluence", 95.0
     elif is_downtrend:
-        return "PUT", "⚡ [Abs-UI] คอนเฟิร์มเทรนด์ขาลง", "Bearish Confluence", 95.0
+        return "PUT", "⚡ [Frozen-State] คอนเฟิร์มเทรนด์ขาลง", "Bearish Confluence", 95.0
     else:
-        return "NONE", "🛡️ [Abs-UI] ตลาดต่ำกว่าเกณฑ์ 94%", "Filter Active", 75.0
+        return "NONE", "🛡️ [Frozen-State] ตลาดต่ำกว่าเกณฑ์ 94%", "Filter Active", 75.0
+
+def update_all_symbols_cache():
+    """คำนวณและล็อกค่าของทุกคู่เงินทันทีตอนวินาทีที่ 30"""
+    global market_analysis_cache
+    new_cache = {}
+    for sym in SYMBOLS.keys():
+        new_cache[sym] = raw_market_analysis(sym)
+    market_analysis_cache = new_cache
+
+def omega_god_5000_layers_analysis(symbol):
+    """ดึงค่าที่ล็อกไว้จาก Cache ป้องกันการคำนวณใหม่แล้วคะแนนเปลี่ยนกลางคัน"""
+    if symbol in market_analysis_cache:
+        return market_analysis_cache[symbol]
+    # ถ้ายังไม่มีใน Cache ให้คำนวณสดครั้งแรก
+    res = raw_market_analysis(symbol)
+    market_analysis_cache[symbol] = res
+    return res
 
 def build_dynamic_menu_keyboard(symbol):
     markup = InlineKeyboardMarkup(row_width=2)
@@ -194,7 +215,7 @@ def build_dynamic_menu_keyboard(symbol):
         InlineKeyboardButton("🔄 รีเซ็ตสถิติ", callback_data="menu_reset")
     )
     
-    # สแกนคะแนนจริงของทุกคู่ ถ้าไม่ถึง 94.0% บังคับแดง 🔴 [RISK] เด็ดขาด
+    # สร้างปุ่มจากค่าใน Cache ป้องกันสีปุ่มไม่ตรงกับผลลัพธ์
     for sym, label in SYMBOLS.items():
         pure_name = label.split(' ', 1)[1] if ' ' in label else label
         dir_res, _, _, conf = omega_god_5000_layers_analysis(sym)
@@ -218,7 +239,7 @@ def get_stats_text(chat_id):
     current_step = user_martingale_step.get(chat_id, 1)
 
     text = (
-        f"🔥 **[ ABSOLUTE UI FIX // STATS ]** 🔥\n\n"
+        f"🔥 **[ FROZEN-STATE 94% // STATS ]** 🔥\n\n"
         f"🎯 **ปฏิบัติการปัจจุบัน: ลุย `[ ไม้ที่ {current_step} ]`**\n\n"
         f"🏆 ชนะไม้ 1: `[ {st['win1']} ]` ({win1_rate:.2f}%)\n"
         f"🥈 ชนะไม้ 2: `[ {st['win2']} ]`\n"
@@ -240,15 +261,20 @@ def get_stats_text(chat_id):
     return text + symbol_breakdown
 
 # ==========================================
-# BACKGROUND WORKER: REFRESH AT SECOND 30
+# BACKGROUND WORKER: SYNC & FREEZE AT SECOND 30
 # ==========================================
 def background_live_refresher():
+    """ทำการล็อกวิเคราะห์ล่วงหน้าตอนวินาทีที่ 30 และอัปเดตปุ่ม"""
     last_refreshed_minute = -1
     while True:
         try:
             now = get_thai_time()
             if now.second == 30 and now.minute != last_refreshed_minute:
                 last_refreshed_minute = now.minute
+                
+                # 🔒 ล็อกวิเคราะห์ทุกคู่เงินไว้ที่วินาทีที่ 30 เป๊ะๆ
+                update_all_symbols_cache()
+
                 for chat_id, info in list(user_last_message.items()):
                     try:
                         msg_id = info.get("message_id")
@@ -291,9 +317,10 @@ def register_email(message):
         if check_user_approved(email, password):
             user_creds[message.chat.id] = {"email": email, "password": password}
             user_martingale_step[message.chat.id] = 1
+            update_all_symbols_cache()
             bot.reply_to(
                 message, 
-                f"🔥 **ABSOLUTE UI AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
+                f"🔥 **FROZEN-STATE AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
                 reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"),
                 parse_mode="Markdown"
             )
@@ -313,14 +340,15 @@ def send_welcome(message):
     if not email or not password or not check_user_approved(email, password):
         bot.send_message(
             chat_id, 
-            "🔥 **TITAN BEAM // ABSOLUTE UI FIX** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
+            "🔥 **TITAN BEAM // FROZEN-STATE CORE** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
             parse_mode="Markdown"
         )
         return
 
+    update_all_symbols_cache()
     bot.send_message(
         chat_id, 
-        "🔥 **TITAN BEAM // ABSOLUTE UI FIX** 🔥\nเปิดระบบซิงค์ปุ่มเขียว-แดงสอดคล้องกับการกดจริง 100%:", 
+        "🔥 **TITAN BEAM // FROZEN-STATE CORE** 🔥\nเปิดระบบล็อกค่าวิเคราะห์ประจำแท่ง (เขียวคือเขียวชัวร์ ไม่มีการสลับเป็นแดงตอนกด):", 
         reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"), 
         parse_mode="Markdown"
     )
@@ -359,7 +387,7 @@ def handle_all(call):
     if chat_id not in user_martingale_step: user_martingale_step[chat_id] = 1
 
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ ระบบซิงค์ปุ่มกับค่าคะแนนวิเคราะห์ตรงกัน 100%")
+        bot.answer_callback_query(call.id, "⚡ ระบบล็อกสัญญาณคงที่ประจำแท่งที่วินาทีที่ 30")
         return
 
     if call.data == "menu_stats":
@@ -408,24 +436,15 @@ def handle_all(call):
         symbol = call.data.split("analyze_")[1]
         symbol_label = SYMBOLS.get(symbol, symbol)
         
+        # 🔒 ดึงค่าจาก Cache ล็อกตาย ป้องกันคะแนนเปลี่ยนตอนกด
         direction, zone_status, tech_used, confidence_pct = omega_god_5000_layers_analysis(symbol)
         
-        # 🚫 บังคับแก้ UI ทันที: ถ้าคะแนน < 94.0% สั่งอัปเดตปุ่มเป็นสีแดง 🔴 บนหน้าจอทันที + เด้งเตือน
         if direction == "NONE" or confidence_pct < 94.0:
             bot.answer_callback_query(
                 call.id, 
-                f"⚠️ {symbol_label}: ตลาดเปลี่ยนดิ่งเหลือ {confidence_pct:.1f}% (อัปเดตปุ่มเป็นสีแดงเรียบร้อย!)", 
+                f"⚠️ {symbol_label}: คู่นี้สภาวะไม่ผ่านเกณฑ์ 94% ➔ งดส่งสัญญาณลงแชท!", 
                 show_alert=True
             )
-            try:
-                # สั่งแก้ไขคีย์บอร์ดของข้อความเดิมให้แสดงผลสีแดงทันที
-                bot.edit_message_reply_markup(
-                    chat_id=chat_id,
-                    message_id=call.message.message_id,
-                    reply_markup=build_dynamic_menu_keyboard(symbol)
-                )
-            except Exception:
-                pass
             return
 
         ttz_code, ttz_desc = check_market_zone_ttz()
@@ -446,18 +465,18 @@ def handle_all(call):
         direction_icon = "🟢 CALL (ขึ้น)" if direction == "CALL" else "🔴 PUT (ลง)"
 
         fixed_signal_text = (
-            f"🔥 **[ ABSOLUTE UI SIGNAL LOCK ]** 🔥\n"
+            f"🔥 **[ FROZEN-STATE SIGNAL LOCK ]** 🔥\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 **คำสั่ง: ลุยออเดอร์ `[ ไม้ที่ {current_step} ]`**\n"
             f"💲📊 สินทรัพย์: `{symbol_label}`\n"
             f"💎 Timeframe: `M1` | Win Rate: `{sym_wr:.2f}%`\n"
             f"⏱️ **เป้าหมายเวลาเข้าออเดอร์: `{target_time_str}`**\n\n"
-            f"🛡️ **[ ABSOLUTE UI TELEMETRY ]**\n"
+            f"🛡️ **[ FROZEN-STATE TELEMETRY ]**\n"
             f"• {tech_used}\n"
             f"• {zone_status}\n"
             f"• {ttz_desc}\n"
             f"• {news_status}\n"
-            f"• Accuracy Score: `{confidence_pct:.1f}%`\n"
+            f"• Locked Score: `{confidence_pct:.1f}%`\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"🚀 **ฟันธงทิศทาง: {direction_icon}**"
         )
@@ -475,8 +494,11 @@ def handle_all(call):
 # MAIN EXECUTION LOOP & THREADING
 # ==========================================
 print("--------------------------------------------------")
-print("🔥 TITAN ABSOLUTE UI FIX ENGINE เริ่มต้นระบบอัปเดตปุ่มเรียลไทม์เรียบร้อย...")
+print("🔥 TITAN FROZEN-STATE CORE เริ่มต้นระบบล็อกค่าความมั่นใจคงที่ประจำแท่ง...")
 print("--------------------------------------------------")
+
+# สแกนตั้งต้น Cache ครั้งแรกทันทีที่เปิดบอท
+update_all_symbols_cache()
 
 refresher_thread = threading.Thread(target=background_live_refresher, daemon=True)
 refresher_thread.start()
