@@ -71,7 +71,7 @@ def check_user_approved(email: str, password: str = None) -> bool:
     return False
 
 # ==========================================
-# ABSOLUTE 94% MARKET ENGINE
+# ABSOLUTE 94% MARKET ENGINE & SINGLE-SOURCE CONFIDENCE
 # ==========================================
 def get_forex_factory_high_impact_news():
     url = "https://www.forexfactory.com/ff_calendar_thisweek.xml"
@@ -96,11 +96,11 @@ def get_forex_factory_high_impact_news():
 def check_market_zone_ttz():
     now_min = get_thai_time().minute
     if now_min in [28, 29, 30, 58, 59, 0, 1]:
-        return "RED", "🔴 [94% HARD-FILTER] โซนอันตรายรอบเปลี่ยนแท่ง"
+        return "RED", "🔴 [ZERO-MISMATCH] โซนอันตรายรอบเปลี่ยนแท่ง"
     elif now_min in [14, 15, 44, 45]:
-        return "YELLOW", "🟡 [94% HARD-FILTER] เฝ้าระวังความผันผวนรอบย่อย"
+        return "YELLOW", "🟡 [ZERO-MISMATCH] เฝ้าระวังความผันผวนรอบย่อย"
     else:
-        return "GREEN", "🟢 [94% HARD-FILTER] เสถียรภาพตลาดระดับสูงสุด"
+        return "GREEN", "🟢 [ZERO-MISMATCH] เสถียรภาพตลาดระดับสูงสุด"
 
 def fetch_live_kline_data(symbol):
     try:
@@ -158,6 +158,7 @@ def omega_god_5000_layers_analysis(symbol):
     upper_wick = last_high - max(last_close, last_open)
     lower_wick = min(last_close, last_open) - last_low
     
+    # ถ้าไส้เทียนยาว ปรับคะแนนความมั่นใจลดลงเหลือ 60%
     if upper_wick > (candle_body * 1.2) or lower_wick > (candle_body * 1.2):
         return "NONE", "🛡️ [94% Guard] ไส้เทียนยาว เสี่ยงย่อตัว", "Wick Warning", 60.0
 
@@ -171,15 +172,16 @@ def omega_god_5000_layers_analysis(symbol):
     is_downtrend = (ema5 < ema20) and (last_close < last_open) and (last_macd < 0) and (last_rsi < 52)
 
     if is_uptrend:
-        return "CALL", "⚡ [94% Hard-Filter] คอนเฟิร์มเทรนด์ขาขึ้น", "Bullish Confluence", 95.0
+        return "CALL", "⚡ [Zero-Mismatch] คอนเฟิร์มเทรนด์ขาขึ้น", "Bullish Confluence", 95.0
     elif is_downtrend:
-        return "PUT", "⚡ [94% Hard-Filter] คอนเฟิร์มเทรนด์ขาลง", "Bearish Confluence", 95.0
+        return "PUT", "⚡ [Zero-Mismatch] คอนเฟิร์มเทรนด์ขาลง", "Bearish Confluence", 95.0
     else:
-        return "NONE", "🛡️ [94% Hard-Filter] ตลาดต่ำกว่าเกณฑ์ 94%", "Filter Active", 75.0
+        return "NONE", "🛡️ [Zero-Mismatch] ตลาดต่ำกว่าเกณฑ์ 94%", "Filter Active", 75.0
 
 def build_dynamic_menu_keyboard(symbol):
     markup = InlineKeyboardMarkup(row_width=2)
     
+    # 1. เช็คคะแนนของคู่ที่เลือกกดอยู่ปัจจุบัน
     _, _, _, current_conf = omega_god_5000_layers_analysis(symbol)
     
     if current_conf >= 94.0:
@@ -194,11 +196,12 @@ def build_dynamic_menu_keyboard(symbol):
         InlineKeyboardButton("🔄 รีเซ็ตสถิติ", callback_data="menu_reset")
     )
     
+    # 2. คำนวณสีปุ่มของทุกคู่เงินแบบเรียลไทม์ (ถ้าคะแนน < 94.0% บังคับเป็นสีแดง 🔴 RISK 100%)
     for sym, label in SYMBOLS.items():
         pure_name = label.split(' ', 1)[1] if ' ' in label else label
-        _, _, _, conf = omega_god_5000_layers_analysis(sym)
+        dir_res, _, _, conf = omega_god_5000_layers_analysis(sym)
         
-        if conf >= 94.0:
+        if conf >= 94.0 and dir_res != "NONE":
             colored_label = f"🟢 {pure_name} [WIN 99%]"
         else:
             colored_label = f"🔴 {pure_name} [RISK]"
@@ -217,7 +220,7 @@ def get_stats_text(chat_id):
     current_step = user_martingale_step.get(chat_id, 1)
 
     text = (
-        f"🔥 **[ ABSOLUTE 94% HARD-FILTER // STATS ]** 🔥\n\n"
+        f"🔥 **[ ZERO-MISMATCH 94% // STATS ]** 🔥\n\n"
         f"🎯 **ปฏิบัติการปัจจุบัน: ลุย `[ ไม้ที่ {current_step} ]`**\n\n"
         f"🏆 ชนะไม้ 1: `[ {st['win1']} ]` ({win1_rate:.2f}%)\n"
         f"🥈 ชนะไม้ 2: `[ {st['win2']} ]`\n"
@@ -292,7 +295,7 @@ def register_email(message):
             user_martingale_step[message.chat.id] = 1
             bot.reply_to(
                 message, 
-                f"🔥 **ABSOLUTE 94% AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
+                f"🔥 **ZERO-MISMATCH AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
                 reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"),
                 parse_mode="Markdown"
             )
@@ -312,14 +315,14 @@ def send_welcome(message):
     if not email or not password or not check_user_approved(email, password):
         bot.send_message(
             chat_id, 
-            "🔥 **TITAN BEAM // ABSOLUTE 94% HARD-FILTER** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
+            "🔥 **TITAN BEAM // ZERO-MISMATCH ENGINE** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
             parse_mode="Markdown"
         )
         return
 
     bot.send_message(
         chat_id, 
-        "🔥 **TITAN BEAM // ABSOLUTE 94% HARD-FILTER** 🔥\nเปิดระบบตัดข้อความ NO TRADE ออกจากแชท 100% (ส่งเฉพาะสัญญาณชัวร์):", 
+        "🔥 **TITAN BEAM // ZERO-MISMATCH ENGINE** 🔥\nเปิดระบบล็อกปุ่มสีแดง 🔴 ทันทีเมื่อคะแนนต่ำกว่า 94% (ไร้ปุ่มเขียวหลอกตา):", 
         reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"), 
         parse_mode="Markdown"
     )
@@ -358,7 +361,7 @@ def handle_all(call):
     if chat_id not in user_martingale_step: user_martingale_step[chat_id] = 1
 
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ ระบบตรวจสอบเงื่อนไขความปลอดภัย 94% ทุกวินาทีที่ 30")
+        bot.answer_callback_query(call.id, "⚡ ระบบซิงค์ปุ่มกับค่าคะแนนวิเคราะห์ตรงกัน 100%")
         return
 
     if call.data == "menu_stats":
@@ -409,11 +412,11 @@ def handle_all(call):
         
         direction, zone_status, tech_used, confidence_pct = omega_god_5000_layers_analysis(symbol)
         
-        # 🚫 HARD FILTER: ต่ำกว่า 94% ให้เด้งเตือนด้านบนป๊อปอัพ และ "ห้ามส่งข้อความลงแชทเด็ดขาด"
+        # 🚫 ถ้าคะแนน < 94.0% หรือเป็น NONE ให้เด้งเตือนด้านบนป๊อปอัพ และ "ห้ามส่งข้อความลงแชท"
         if direction == "NONE" or confidence_pct < 94.0:
             bot.answer_callback_query(
                 call.id, 
-                f"⚠️ {symbol_label}: ตลาดไม่ถึงเกณฑ์ 94% (ได้ {confidence_pct:.1f}%) ➔ งดส่งสัญญาณลงแชทเพื่อป้องกันพอร์ต!", 
+                f"⚠️ {symbol_label}: ตลาดไม่ถึงเกณฑ์ 94% (ได้ {confidence_pct:.1f}%) ➔ งดส่งสัญญาณ!", 
                 show_alert=True
             )
             return
@@ -436,13 +439,13 @@ def handle_all(call):
         direction_icon = "🟢 CALL (ขึ้น)" if direction == "CALL" else "🔴 PUT (ลง)"
 
         fixed_signal_text = (
-            f"🔥 **[ 94% HARD-FILTER SIGNAL LOCK ]** 🔥\n"
+            f"🔥 **[ ZERO-MISMATCH SIGNAL LOCK ]** 🔥\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 **คำสั่ง: ลุยออเดอร์ `[ ไม้ที่ {current_step} ]`**\n"
             f"💲📊 สินทรัพย์: `{symbol_label}`\n"
             f"💎 Timeframe: `M1` | Win Rate: `{sym_wr:.2f}%`\n"
             f"⏱️ **เป้าหมายเวลาเข้าออเดอร์: `{target_time_str}`**\n\n"
-            f"🛡️ **[ 94% HARD-FILTER TELEMETRY ]**\n"
+            f"🛡️ **[ ZERO-MISMATCH TELEMETRY ]**\n"
             f"• {tech_used}\n"
             f"• {zone_status}\n"
             f"• {ttz_desc}\n"
@@ -465,7 +468,7 @@ def handle_all(call):
 # MAIN EXECUTION LOOP & THREADING
 # ==========================================
 print("--------------------------------------------------")
-print("🔥 TITAN ABSOLUTE 94% HARD-FILTER เริ่มต้นระบบตัดข้อความ NO TRADE เรียบร้อย...")
+print("🔥 TITAN ZERO-MISMATCH ENGINE เริ่มต้นระบบซิงค์ปุ่มสีแดงเรียบร้อย...")
 print("--------------------------------------------------")
 
 refresher_thread = threading.Thread(target=background_live_refresher, daemon=True)
