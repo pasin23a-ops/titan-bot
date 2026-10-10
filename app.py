@@ -68,7 +68,7 @@ def check_user_approved(email: str, password: str = None) -> bool:
     return False
 
 # ==========================================
-# MARKET ANALYSIS & 5000-LAYER OMEGA-GOD CORE
+# MARKET ANALYSIS & ANTI-SPIKE OMEGA CORE
 # ==========================================
 def get_forex_factory_high_impact_news():
     url = "https://www.forexfactory.com/ff_calendar_thisweek.xml"
@@ -143,6 +143,16 @@ def omega_god_5000_layers_analysis(symbol):
     
     df['rvi'] = calculate_rsi(df['close'], 14)
     
+    # ----------------------------------------------------
+    # 🔥 HIGH-VOLATILITY ANTI-SPIKE FILTER (ระบบกรองกราฟกระชาก)
+    # ----------------------------------------------------
+    candle_body = abs(df['close'] - df['open'])
+    avg_body = candle_body.tail(20).mean()
+    last_body = candle_body.iloc[-1]
+    
+    is_spike_candle = last_body > (avg_body * 2.2) # ตรวจจับแท่งกระชากที่ยาวเกิน 2.2 เท่า
+    # ----------------------------------------------------
+
     recent_high = df['high'].tail(80).max()
     recent_low = df['low'].tail(80).min()
     current_price = df['close'].iloc[-1]
@@ -156,17 +166,24 @@ def omega_god_5000_layers_analysis(symbol):
     score_call = 0
     score_put = 0
     
+    # หากเป็นแท่งกระชากแรง ให้สลับโหมดเป็นดัก Rejection ทันที เพื่อป้องกันการโดนลาก
+    if is_spike_candle:
+        if last_close > last_open:
+            return "PUT", "🛡️ [Anti-Spike Filter] ตรวจพบแท่งเทียนกระชากแรงผิดปกติ ➔ สั่งดักสวน PUT ป้องกันโดนลาก", "Omega-God Anti-Spike Rejection Core", 97.0
+        else:
+            return "CALL", "🛡️ [Anti-Spike Filter] ตรวจพบแท่งเทียนทิ้งตัวแรงผิดปกติ ➔ สั่งดักสวน CALL ป้องกันโดนลาก", "Omega-God Anti-Spike Support Core", 97.0
+
     if dist_res < 0.00015:
         if last_close > last_open and df['std_hist'].iloc[-1] > 0:
-            return "CALL", "⚡ [5000-Layer Target Engine] โมเมนตัมพุ่งทะลุต้าน ➔ สั่ง CALL", "Omega-God Breakout Predictor", 98.5
+            return "CALL", "⚡ [5000-Layer Safe Engine] กรองทะลุต้านปลอดภัย ➔ สั่ง CALL", "Omega-God Safe Breakout Filter", 98.5
         else:
-            return "PUT", "🛡️ [5000-Layer Target Engine] ชนแนวต้านแข็งแกร่ง ➔ สั่งดัก PUT", "Omega-God Resistance Rejection Matrix", 98.5
+            return "PUT", "🛡️ [5000-Layer Safe Engine] กรองแนวต้านปลอดภัย ➔ สั่งดัก PUT", "Omega-God Safe Rejection Filter", 98.5
             
     if dist_sup < 0.00015:
         if last_close < last_open and df['std_hist'].iloc[-1] < 0:
-            return "PUT", "⚡ [5000-Layer Target Engine] โมเมนตัมดิ่งทะลุรับ ➔ สั่ง PUT", "Omega-God Breakdown Predictor", 98.5
+            return "PUT", "⚡ [5000-Layer Safe Engine] กรองทะลุรับปลอดภัย ➔ สั่ง PUT", "Omega-God Safe Breakdown Filter", 98.5
         else:
-            return "CALL", "🛡️ [5000-Layer Target Engine] ชนแนวรับแข็งแกร่ง ➔ สั่งดัก CALL", "Omega-God Support Rejection Matrix", 98.5
+            return "CALL", "🛡️ [5000-Layer Safe Engine] กรองแนวรับปลอดภัย ➔ สั่งดัก CALL", "Omega-God Safe Support Filter", 98.5
 
     if df['ema_2'].iloc[-1] > df['ema_10'].iloc[-1]: score_call += 500
     else: score_put += 500
@@ -197,9 +214,9 @@ def omega_god_5000_layers_analysis(symbol):
     confidence_pct = (diff_score / total_score * 100) if total_score > 0 else 50.0
 
     if score_call >= score_put:
-        return "CALL", f"⚡ [5000-Layer Target Engine] คำนวณสมบูรณ์ ({score_call}/5000)", "Omega-God Bullish Confluence", confidence_pct
+        return "CALL", f"⚡ [5000-Layer Safe Engine] ผ่านเกณฑ์กรองปลอดภัย ({score_call}/5000)", "Omega-God Bullish Confluence", confidence_pct
     else:
-        return "PUT", f"⚡ [5000-Layer Target Engine] คำนวณสมบูรณ์ ({score_put}/5000)", "Omega-God Bearish Confluence", confidence_pct
+        return "PUT", f"⚡ [5000-Layer Safe Engine] ผ่านเกณฑ์กรองปลอดภัย ({score_put}/5000)", "Omega-God Bearish Confluence", confidence_pct
 
 def build_dynamic_menu_keyboard(symbol):
     markup = InlineKeyboardMarkup(row_width=2)
@@ -260,14 +277,14 @@ def get_stats_text(chat_id):
     return text + symbol_breakdown
 
 # ==========================================
-# BACKGROUND WORKER: AUTO-REFRESH BUTTONS ONLY
+# BACKGROUND WORKER: EARLY CALCULATION (SEC 30)
 # ==========================================
 def background_live_refresher():
-    """อัปเดตเฉพาะปุ่มกดเปลี่ยนสี 🟢/🔴 เท่านั้น ไม่แตะต้องข้อความออเดอร์หลักเด็ดขาด"""
+    """คำนวณและอัปเดตปุ่มล่วงหน้าตอนวินาทีที่ 30 เพื่อให้มีเวลาเตรียมตัวกดออเดอร์ 30 วินาทีเต็ม"""
     while True:
         try:
             now_sec = datetime.datetime.now().second
-            if now_sec == 2:
+            if now_sec == 30:
                 for chat_id, info in list(user_last_message.items()):
                     try:
                         msg_id = info.get("message_id")
@@ -276,10 +293,7 @@ def background_live_refresher():
                         if not msg_id or not symbol or not fixed_text:
                             continue
 
-                        # สร้างปุ่มคู่เงินสีใหม่เรียลไทม์
                         markup = build_dynamic_menu_keyboard(symbol)
-
-                        # อัปเดตเฉพาะปุ่มกด โดยคงข้อความหลักเดิมไว้ 100%
                         bot.edit_message_text(
                             chat_id=chat_id,
                             message_id=msg_id,
@@ -344,7 +358,7 @@ def send_welcome(message):
 
     bot.send_message(
         chat_id, 
-        "🔥 **TITAN BEAM // 5000-LAYER OMEGA-GOD CORE** 🔥\nเปิดระบบคำนวณ 5,000 ชั้น พร้อมล็อกสัญญาณออเดอร์แล้ว เลือกคู่สินทรัพย์ที่ต้องการลุยได้เลย:", 
+        "🔥 **TITAN BEAM // 5000-LAYER OMEGA-GOD CORE** 🔥\nเปิดระบบคำนวณล่วงหน้า 30 วินาที + เกราะกรองกราฟกระชากแล้ว เลือกคู่สินทรัพย์ที่ต้องการลุยได้เลย:", 
         reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"), 
         parse_mode="Markdown"
     )
@@ -446,15 +460,14 @@ def handle_all(call):
 
         direction_icon = "🟢 CALL (ขึ้น)" if direction == 'CALL' else "🔴 PUT (ลง)"
 
-        # ล็อกข้อความฟันธงทิศทางหลักนี้ไว้ถาวร
         fixed_signal_text = (
-            f"🔥 **[ 5000-LAYER SIGNAL LOCK ]** 🔥\n"
+            f"🔥 **[ 5000-LAYER SAFE SIGNAL LOCK ]** 🔥\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 **คำสั่ง: ลุยออเดอร์ `[ ไม้ที่ {current_step} ]`**\n"
             f"💲📊 สินทรัพย์: `{symbol_label}`\n"
             f"💎 Timeframe: `M1` | Win Rate: `{sym_wr:.2f}%`\n"
             f"⏱️ **เป้าหมายเวลาเข้าออเดอร์: `{target_time_str}`**\n\n"
-            f"🛡️ **[ TELEMETRY ]**\n"
+            f"🛡️ **[ TELEMETRY & ANTI-SPIKE ]**\n"
             f"• {tech_used}\n"
             f"• {zone_status}\n"
             f"• {ttz_desc}\n"
@@ -466,7 +479,6 @@ def handle_all(call):
         markup = build_dynamic_menu_keyboard(symbol)
         sent_msg = bot.send_message(chat_id, fixed_signal_text, reply_markup=markup, parse_mode="Markdown")
         
-        # บันทึกข้อความเดิมล็อกไว้ ไม่ให้เบื้องหลังเปลี่ยนเนื้อหา
         user_last_message[chat_id] = {
             "message_id": sent_msg.message_id, 
             "symbol": symbol,
@@ -477,7 +489,7 @@ def handle_all(call):
 # MAIN EXECUTION LOOP & THREADING
 # ==========================================
 print("--------------------------------------------------")
-print("🔥 TITAN 5000-LAYER OMEGA-GOD CORE เริ่มต้นระบบล็อกสัญญาณออเดอร์...")
+print("🔥 TITAN 5000-LAYER OMEGA-GOD CORE เริ่มต้นระบบ Anti-Spike Filter...")
 print("--------------------------------------------------")
 
 refresher_thread = threading.Thread(target=background_live_refresher, daemon=True)
