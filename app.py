@@ -71,7 +71,7 @@ def check_user_approved(email: str, password: str = None) -> bool:
     return False
 
 # ==========================================
-# REAL-TIME MARKET ENGINE
+# REAL-TIME MARKET ENGINE & DYNAMIC TOP 5
 # ==========================================
 def get_forex_factory_high_impact_news():
     url = "https://www.forexfactory.com/ff_calendar_thisweek.xml"
@@ -96,11 +96,11 @@ def get_forex_factory_high_impact_news():
 def check_market_zone_ttz():
     now_min = get_thai_time().minute
     if now_min in [28, 29, 30, 58, 59, 0, 1]:
-        return "RED", "🔴 [FORCE LIVE] โซนอันตรายรอบเปลี่ยนแท่ง"
+        return "RED", "🔴 [TOP-5 ENGINE] โซนอันตรายรอบเปลี่ยนแท่ง"
     elif now_min in [14, 15, 44, 45]:
-        return "YELLOW", "🟡 [FORCE LIVE] เฝ้าระวังความผันผวนรอบย่อย"
+        return "YELLOW", "🟡 [TOP-5 ENGINE] เฝ้าระวังความผันผวนรอบย่อย"
     else:
-        return "GREEN", "🟢 [FORCE LIVE] เสถียรภาพตลาดระดับสูงสุด"
+        return "GREEN", "🟢 [TOP-5 ENGINE] เสถียรภาพตลาดระดับสูงสุด"
 
 def fetch_live_kline_data(symbol):
     try:
@@ -160,9 +160,9 @@ def omega_god_5000_layers_analysis(symbol):
     
     if is_spike_candle:
         if last_close > last_open:
-            return "PUT", "🛡️ [Anti-Spike Core] กราฟพุ่งกระชาก ➔ สั่งดักสวน PUT", "Force Live Engine", 50.0
+            return "PUT", "🛡️ [Anti-Spike Core] กราฟพุ่งกระชาก ➔ สั่งดักสวน PUT", "Dynamic Rejection Engine", 50.0
         else:
-            return "CALL", "🛡️ [Anti-Spike Core] กราฟดิ่งกระชาก ➔ สั่งดักสวน CALL", "Force Live Engine", 50.0
+            return "CALL", "🛡️ [Anti-Spike Core] กราฟดิ่งกระชาก ➔ สั่งดักสวน CALL", "Dynamic Rejection Engine", 50.0
 
     score_call = 0
     score_put = 0
@@ -187,25 +187,27 @@ def omega_god_5000_layers_analysis(symbol):
     confidence_pct = (diff_score / total_score * 100) if total_score > 0 else 50.0
 
     if score_call >= score_put:
-        return "CALL", f"⚡ [Force Live] วิเคราะห์สำเร็จ ({score_call}/4000)", "Live Bullish Confluence", confidence_pct
+        return "CALL", f"⚡ [Top-5 Engine] ประมวลผลสำเร็จ ({score_call}/4000)", "Bullish Confluence", confidence_pct
     else:
-        return "PUT", f"⚡ [Force Live] วิเคราะห์สำเร็จ ({score_put}/4000)", "Live Bearish Confluence", confidence_pct
+        return "PUT", f"⚡ [Top-5 Engine] ประมวลผลสำเร็จ ({score_put}/4000)", "Bearish Confluence", confidence_pct
 
 def build_dynamic_menu_keyboard(symbol):
     markup = InlineKeyboardMarkup(row_width=2)
     
     current_time_str = get_thai_time().strftime('%H:%M:%S')
-    markup.add(InlineKeyboardButton(f"🔄 [Live Refresh: {current_time_str}]", callback_data="do_nothing"))
+    markup.add(InlineKeyboardButton(f"🟢 [ LIVE REFRESH: {current_time_str} ]", callback_data="do_nothing"))
     
     markup.add(
         InlineKeyboardButton("📊 เช็คสถิติระบบ", callback_data="menu_stats"),
         InlineKeyboardButton("🔄 รีเซ็ตสถิติ", callback_data="menu_reset")
     )
     
+    # คำนวณคะแนนของทุกคู่เงิน
     symbol_confidences = {s: omega_god_5000_layers_analysis(s)[3] for s in SYMBOLS.keys()}
     sorted_symbols = sorted(symbol_confidences.items(), key=lambda x: x[1], reverse=True)
     
-    top_green_symbols = [item[0] for item in sorted_symbols[:2] if item[1] >= 65.0]
+    # ดึง Top 5 คู่เงินที่มีคะแนนสูงสุดประจำรอบนั้นมาแสดงเป็นสีเขียวสดๆ (ไม่ซ้ำเดิมแน่นอน)
+    top_green_symbols = [item[0] for item in sorted_symbols[:5]]
 
     for sym, label in SYMBOLS.items():
         pure_name = label.split(' ', 1)[1] if ' ' in label else label
@@ -229,7 +231,7 @@ def get_stats_text(chat_id):
     current_step = user_martingale_step.get(chat_id, 1)
 
     text = (
-        f"🔥 **[ FORCE LIVE OMEGA-GOD // STATS ]** 🔥\n\n"
+        f"🔥 **[ TOP-5 DYNAMIC OMEGA-GOD // STATS ]** 🔥\n\n"
         f"🎯 **ปฏิบัติการปัจจุบัน: ลุย `[ ไม้ที่ {current_step} ]`**\n\n"
         f"🏆 ชนะไม้ 1: `[ {st['win1']} ]` ({win1_rate:.2f}%)\n"
         f"🥈 ชนะไม้ 2: `[ {st['win2']} ]`\n"
@@ -251,7 +253,7 @@ def get_stats_text(chat_id):
     return text + symbol_breakdown
 
 # ==========================================
-# BACKGROUND WORKER: FORCE LIVE REFRESH EVERY 10 SECONDS
+# BACKGROUND WORKER: REFRESH ENGINE (EVERY 10 SECONDS)
 # ==========================================
 def background_live_refresher():
     while True:
@@ -300,7 +302,7 @@ def register_email(message):
             user_martingale_step[message.chat.id] = 1
             bot.reply_to(
                 message, 
-                f"🔥 **FORCE LIVE AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
+                f"🔥 **TOP-5 DYNAMIC AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
                 reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"),
                 parse_mode="Markdown"
             )
@@ -320,14 +322,14 @@ def send_welcome(message):
     if not email or not password or not check_user_approved(email, password):
         bot.send_message(
             chat_id, 
-            "🔥 **TITAN BEAM // FORCE LIVE CORE** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
+            "🔥 **TITAN BEAM // TOP-5 DYNAMIC CORE** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
             parse_mode="Markdown"
         )
         return
 
     bot.send_message(
         chat_id, 
-        "🔥 **TITAN BEAM // FORCE LIVE CORE** 🔥\nเปิดระบบ Force Live-Ticker (มีปุ่มเวลาวิ่งสดทุก 10 วินาที):", 
+        "🔥 **TITAN BEAM // TOP-5 DYNAMIC CORE** 🔥\nเปิดระบบคัดเลือกตัวท็อป Top 5 สลับคู่เขียวอัตโนมัติตามสภาพตลาดสด:", 
         reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"), 
         parse_mode="Markdown"
     )
@@ -366,7 +368,7 @@ def handle_all(call):
     if chat_id not in user_martingale_step: user_martingale_step[chat_id] = 1
 
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ ระบบกำลังรีเฟรชข้อมูลเรียลไทม์สดๆ ทุก 10 วินาที")
+        bot.answer_callback_query(call.id, "⚡ ระบบกำลังอัปเดตสถิติตลาดเรียลไทม์สดๆ ทุกรอบ")
         return
 
     if call.data == "menu_stats":
@@ -434,13 +436,13 @@ def handle_all(call):
         direction_icon = "🟢 CALL (ขึ้น)" if direction == 'CALL' else "🔴 PUT (ลง)"
 
         fixed_signal_text = (
-            f"🔥 **[ FORCE LIVE SIGNAL LOCK ]** 🔥\n"
+            f"🔥 **[ TOP-5 DYNAMIC SIGNAL LOCK ]** 🔥\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 **คำสั่ง: ลุยออเดอร์ `[ ไม้ที่ {current_step} ]`**\n"
             f"💲📊 สินทรัพย์: `{symbol_label}`\n"
             f"💎 Timeframe: `M1` | Win Rate: `{sym_wr:.2f}%`\n"
             f"⏱️ **เป้าหมายเวลาเข้าออเดอร์: `{target_time_str}`**\n\n"
-            f"🛡️ **[ FORCE LIVE TELEMETRY ]**\n"
+            f"🛡️ **[ TOP-5 TELEMETRY ]**\n"
             f"• {tech_used}\n"
             f"• {zone_status}\n"
             f"• {ttz_desc}\n"
@@ -462,7 +464,7 @@ def handle_all(call):
 # MAIN EXECUTION LOOP & THREADING
 # ==========================================
 print("--------------------------------------------------")
-print("🔥 TITAN FORCE LIVE CORE เริ่มต้นระบบ Force Live-Ticker...")
+print("🔥 TITAN TOP-5 DYNAMIC CORE เริ่มต้นระบบสลับคู่เขียว Top 5...")
 print("--------------------------------------------------")
 
 refresher_thread = threading.Thread(target=background_live_refresher, daemon=True)
