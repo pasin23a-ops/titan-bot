@@ -93,9 +93,9 @@ def get_forex_factory_high_impact_news():
 def check_market_zone_ttz():
     now_sec = get_thai_time().second
     if 30 <= now_sec <= 59:
-        return "GREEN", "🟢 [LOCKED & READY] ล็อกสัญญาณพร้อมเทรดช่วง 20s-10s"
+        return "GREEN", "🟢 [90-99% ZONE] ล็อกสัญญาณพร้อมเทรดช่วง 20s-10s"
     else:
-        return "RED", "🔴 [ANALYZING] กำลังประมวลผลแท่งปัจจุบัน"
+        return "RED", "🔴 [ANALYZING] กำลังรีเซ็ตและประมวลผลแท่งใหม่"
 
 def fetch_live_kline_data(symbol, interval="1m", limit=100):
     try:
@@ -132,7 +132,7 @@ def calculate_rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 # ==========================================
-# IMMEDIATE LOCK ANALYZER (RESET AT 30s)
+# 90-99% FLEXIBLE FILTER & IMMEDIATE LOCK CORE
 # ==========================================
 def raw_market_analysis(symbol):
     df_m1 = fetch_live_kline_data(symbol, interval="1m", limit=100)
@@ -143,20 +143,21 @@ def raw_market_analysis(symbol):
     m5_ema20 = float(df_m5['ema_20'].iloc[-1])
     m5_is_uptrend = m5_close > m5_ema20
 
+    # ตรวจสอบแนวรับแนวต้านแบบยืดหยุ่น (กรองความเสี่ยงสูง)
     recent_highs = df_m1['high'].tail(30).max()
     recent_lows = df_m1['low'].tail(30).min()
     current_price = float(df_m1['close'].iloc[-1])
     
-    if abs(current_price - recent_highs) / current_price < 0.0003 or abs(current_price - recent_lows) / current_price < 0.0003:
-        return "NONE", "🛡️ [Guard] ชนแนวรับ/แนวต้านลับ", "S/R Barrier Trap", 50.0
+    if abs(current_price - recent_highs) / current_price < 0.0002 or abs(current_price - recent_lows) / current_price < 0.0002:
+        return "NONE", "🛡️ [Guard] ใกล้แนวรับ/แนวต้านเกินไป", "S/R Barrier Warning", 50.0
 
     df_m1['body'] = abs(df_m1['close'] - df_m1['open'])
     df_m1['range'] = df_m1['high'] - df_m1['low']
     last_body = float(df_m1['body'].iloc[-1])
     last_range = float(df_m1['range'].iloc[-1])
     
-    if last_range > 0 and (last_body / last_range) < 0.30:
-        return "NONE", "🛡️ [Guard] ทรงไส้เทียนหลอกล่อ", "Fakeout Trap", 50.0
+    if last_range > 0 and (last_body / last_range) < 0.25:
+        return "NONE", "🛡️ [Guard] ไส้เทียนยาวผิดปกติ", "Fakeout Warning", 50.0
 
     df_m1['ema_5'] = df_m1['close'].ewm(span=5, adjust=False).mean()
     df_m1['ema_20'] = df_m1['close'].ewm(span=20, adjust=False).mean()
@@ -177,15 +178,16 @@ def raw_market_analysis(symbol):
     last_rsi = float(df_m1['rsi'].iloc[-1])
     last_open = float(df_m1['open'].iloc[-1])
 
-    is_call = (ema5 > ema20) and (ema20 > ema50) and (current_price > last_open) and (last_macd > 0) and (53 < last_rsi < 67) and m5_is_uptrend
-    is_put = (ema5 < ema20) and (ema20 < ema50) and (current_price < last_open) and (last_macd < 0) and (33 < last_rsi < 47) and (not m5_is_uptrend)
+    # เกณฑ์ความมั่นใจระดับ 90% - 99% (ยืดหยุ่นขึ้นเพื่อให้สัญญาณออกง่ายขึ้น แต่ยังปลอดภัย)
+    is_call = (ema5 > ema20) and (current_price > last_open) and (last_macd > 0) and (50 < last_rsi < 70) and m5_is_uptrend
+    is_put = (ema5 < ema20) and (current_price < last_open) and (last_macd < 0) and (30 < last_rsi < 50) and (not m5_is_uptrend)
 
     if is_call:
-        return "CALL", "⚡ [Locked] คอนเฟิร์มสมบูรณ์แบบขาขึ้น", "Bullish Confluence", 96.5
+        return "CALL", "⚡ [90-99% Lock] คอนเฟิร์มทิศทางขาขึ้นสมบูรณ์", "Bullish Confluence", 93.5
     elif is_put:
-        return "PUT", "⚡ [Locked] คอนเฟิร์มสมบูรณ์แบบขาลง", "Bearish Confluence", 96.5
+        return "PUT", "⚡ [90-99% Lock] คอนเฟิร์มทิศทางขาลงสมบูรณ์", "Bearish Confluence", 93.5
     else:
-        return "NONE", "🛡️ [Filter] ตลาดไม่ถึงเกณฑ์ 95%", "Filter Active", 70.0
+        return "NONE", "🛡️ [Filter] ตลาดไม่ผ่านเกณฑ์ 90%", "Filter Active", 70.0
 
 def update_all_symbols_cache():
     global atomic_market_cache
@@ -213,7 +215,7 @@ def build_dynamic_menu_keyboard(symbol):
     
     now_sec = get_thai_time().second
     if 30 <= now_sec <= 59:
-        header_label = f"🟢 [ LOCKED & READY: {get_thai_time().strftime('%H:%M:%S')} ]"
+        header_label = f"🟢 [ 90-99% READY: {get_thai_time().strftime('%H:%M:%S')} ]"
     else:
         header_label = f"🟡 [ RESETTING... {get_thai_time().strftime('%H:%M:%S')} ]"
         
@@ -228,8 +230,9 @@ def build_dynamic_menu_keyboard(symbol):
         pure_name = label.split(' ', 1)[1] if ' ' in label else label
         dir_res, _, _, conf = omega_god_5000_layers_analysis(sym)
         
-        if conf >= 95.0 and dir_res != "NONE":
-            colored_label = f"🟢 {pure_name} [WIN 99%]"
+        # ปรับเกณฑ์แสดงผลเป็นสีเขียวเมื่อความมั่นใจผ่าน 90% ขึ้นไป
+        if conf >= 90.0 and dir_res != "NONE":
+            colored_label = f"🟢 {pure_name} [WIN 93%]"
         else:
             colored_label = f"🔴 {pure_name} [RISK]"
             
@@ -247,7 +250,7 @@ def get_stats_text(chat_id):
     current_step = user_martingale_step.get(chat_id, 1)
 
     text = (
-        f"🔥 **[ 30s-RESET & IMMEDIATE LOCK // STATS ]** 🔥\n\n"
+        f"🔥 **[ 90-99% FLEXIBLE FILTER // STATS ]** 🔥\n\n"
         f"🎯 **ปฏิบัติการปัจจุบัน: ลุย `[ ไม้ที่ {current_step} ]`**\n\n"
         f"🏆 ชนะไม้ 1: `[ {st['win1']} ]` ({win1_rate:.2f}%)\n"
         f"🥈 ชนะไม้ 2: `[ {st['win2']} ]`\n"
@@ -276,7 +279,6 @@ def background_live_refresher():
     while True:
         try:
             now = get_thai_time()
-            # รีเซ็ตและคำนวณล็อกผลลัพธ์ทันทีที่วินาทีที่ 30 เป๊ะๆ
             if now.second == 30 and now.second != last_refreshed_second:
                 last_refreshed_second = now.second
                 
@@ -330,7 +332,7 @@ def register_email(message):
             update_all_symbols_cache()
             bot.reply_to(
                 message, 
-                f"🔥 **IMMEDIATE LOCK AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
+                f"🔥 **90-99% AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
                 reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"),
                 parse_mode="Markdown"
             )
@@ -350,7 +352,7 @@ def send_welcome(message):
     if not email or not password or not check_user_approved(email, password):
         bot.send_message(
             chat_id, 
-            "🔥 **TITAN BEAM // 30s-RESET & IMMEDIATE LOCK CORE** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
+            "🔥 **TITAN BEAM // 90-99% FLEXIBLE FILTER CORE** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
             parse_mode="Markdown"
         )
         return
@@ -358,7 +360,7 @@ def send_welcome(message):
     update_all_symbols_cache()
     bot.send_message(
         chat_id, 
-        "🔥 **TITAN BEAM // 30s-RESET & IMMEDIATE LOCK CORE** 🔥\nเปิดระบบรีเซ็ตและล็อกสัญญาณทันทีที่วินาทีที่ 30 พร้อมลุย:", 
+        "🔥 **TITAN BEAM // 90-99% FLEXIBLE FILTER CORE** 🔥\nเปิดระบบกรองยืดหยุ่น Win Rate 90-99% พร้อมลุย:", 
         reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"), 
         parse_mode="Markdown"
     )
@@ -397,7 +399,7 @@ def handle_all(call):
     if chat_id not in user_martingale_step: user_martingale_step[chat_id] = 1
 
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ ระบบรีเซ็ตและล็อกสัญญาณนิ่งสนิทตั้งแต่เสี้ยววินาทีที่ 30")
+        bot.answer_callback_query(call.id, "⚡ ระบบล็อกสัญญาณนิ่งช่วงวินาทีที่ 30 พร้อมเทรด")
         return
 
     if call.data == "menu_stats":
@@ -448,8 +450,8 @@ def handle_all(call):
         
         direction, zone_status, tech_used, confidence_pct = omega_god_5000_layers_analysis(symbol)
         
-        if direction == "NONE" or confidence_pct < 95.0:
-            bot.answer_callback_query(call.id, "⚠️ คู่นี้ความมั่นใจต่ำกว่า 95% (อัปเดตเมนูเรียบร้อย)")
+        if direction == "NONE" or confidence_pct < 90.0:
+            bot.answer_callback_query(call.id, "⚠️ คู่นี้ความมั่นใจต่ำกว่า 90% (อัปเดตเมนูเรียบร้อย)")
             try:
                 bot.edit_message_reply_markup(
                     chat_id=chat_id,
@@ -478,13 +480,13 @@ def handle_all(call):
         direction_icon = "🟢 CALL (ขึ้น)" if direction == "CALL" else "🔴 PUT (ลง)"
 
         fixed_signal_text = (
-            f"🔥 **[ IMMEDIATE LOCK SIGNAL ]** 🔥\n"
+            f"🔥 **[ 90-99% FLEXIBLE SIGNAL ]** 🔥\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 **คำสั่ง: ลุยออเดอร์ `[ ไม้ที่ {current_step} ]`**\n"
             f"💲📊 สินทรัพย์: `{symbol_label}`\n"
             f"💎 Timeframe: `M1` | Win Rate: `{sym_wr:.2f}%`\n"
             f"⏱️ **เป้าหมายเวลาเข้าออเดอร์: `{target_time_str}`**\n\n"
-            f"🛡️ **[ IMMEDIATE TELEMETRY ]**\n"
+            f"🛡️ **[ FLEXIBLE TELEMETRY ]**\n"
             f"• {tech_used}\n"
             f"• {zone_status}\n"
             f"• {ttz_desc}\n"
@@ -504,7 +506,7 @@ def handle_all(call):
         }
 
 print("--------------------------------------------------")
-print("🔥 TITAN IMMEDIATE LOCK CORE เริ่มต้นระบบเรียบร้อย...")
+print("🔥 TITAN 90-99% FLEXIBLE FILTER CORE เริ่มต้นระบบเรียบร้อย...")
 print("--------------------------------------------------")
 
 update_all_symbols_cache()
@@ -518,4 +520,3 @@ while True:
     except Exception as e:
         print(f"⚠️ ระบบเชื่อมต่อขัดข้อง: {e} - กำลังรีเซ็ตการเชื่อมต่อใน 5 วินาที...")
         time.sleep(5)
-       
