@@ -8,18 +8,15 @@ import requests
 import threading
 
 # ==========================================
-# API Token & Firebase Configuration
+# API Token Configuration
 # ==========================================
 BOT_TOKEN = "8822727043:AAEEKA96HNfVXO4CMYF7GxBTXq9q_uQhU4Y"
-FIREBASE_PROJECT_ID = "v70-user-auth"
-
 bot = telebot.TeleBot(BOT_TOKEN)
 
 INTERVAL = "1m"
 user_stats = {}
 symbol_stats = {}
 user_martingale_step = {}
-user_creds = {}
 active_chat_ids = set()
 cooldown_status = {}
 last_signal_time = {}
@@ -51,23 +48,6 @@ SYMBOLS = {
 def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
-def check_user_approved(email: str, password: str = None) -> bool:
-    if not email or not password:
-        return False
-    email = email.lower().strip()
-    url = f"https://firestore.googleapis.com/v1/projects/{FIREBASE_PROJECT_ID}/databases/(default)/documents/users/{email}"
-    try:
-        res = requests.get(url, timeout=5)
-        if res.status_code == 200:
-            data = res.json()
-            fields = data.get("fields", {})
-            status = fields.get("status", {}).get("stringValue", "")
-            db_password = fields.get("password", {}).get("stringValue", "")
-            return (status == "approved") and (str(db_password) == str(password))
-    except Exception as e:
-        print(f"⚠️ Firebase Error: {e}")
-    return False
-
 def fetch_live_kline_data(symbol, interval="1m", limit=100):
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
@@ -96,49 +76,37 @@ def fetch_live_kline_data(symbol, interval="1m", limit=100):
     return df
 
 # ==========================================
-# RELAXED ENGINE (เน้นข้อ 1, 2, 8, 9 แบบผ่อนปรนให้ส่งสัญญาณง่ายขึ้น)
+# FAST-START FILTER ENGINE
 # ==========================================
-def evaluate_relaxed_filters(symbol):
+def evaluate_fast_filters(symbol):
     df = fetch_live_kline_data(symbol, interval="1m", limit=100)
     df_m5 = fetch_live_kline_data(symbol, interval="5m", limit=50)
 
-    # [1] Data Quality Filter: เช็กความสมบูรณ์ขั้นพื้นฐาน
-    if df is None or len(df) < 30 or df_m5 is None or len(df_m5) < 15 or df['close'].isnull().any():
-        return None, "NONE", "SKIPPED_DATA_QUALITY"
+    if df is None or len(df) < 20 or df_m5 is None or len(df_m5) < 10:
+        return None, "NONE", "SKIPPED"
 
-    # [2] Volatility Filter: กรองช่วงตลาดนิ่งหรือสวิงรุนแรงเกินไปแบบยืดหยุ่น
-    recent_range = float(df['high'].iloc[-5:].max() - df['low'].iloc[-5:].min())
-    if recent_range < 0.0001:
-        return None, "NONE", "SKIPPED_VOLATILITY"
-
-    # โครงสร้างเทรนด์หลัก M5
     df_m5['ema_20'] = df_m5['close'].ewm(span=20, adjust=False).mean()
     m5_close = float(df_m5['close'].iloc[-1])
     m5_ema20 = float(df_m5['ema_20'].iloc[-1])
+    
+    is_uptrend = m5_close > m5_ema20
+    is_downtrend = m5_close < m5_ema20
 
     last_open = float(df['open'].iloc[-1])
     last_close = float(df['close'].iloc[-1])
-
-    is_uptrend = m5_close > m5_ema20
-    is_downtrend = m5_close < m5_ema20
     is_green = last_close > last_open
     is_red = last_close < last_open
 
-    # [9] Out-of-sample Test (แบบผ่อนปรน): เช็กแค่ทิศทางแท่งปัจจุบันกับแท่งก่อนหน้าสอดคล้องกันก็พอ
-    prev_green = float(df['close'].iloc[-2]) > float(df['open'].iloc[-2])
-    prev_red = float(df['close'].iloc[-2]) < float(df['open'].iloc[-2])
+    if is_uptrend and is_green:
+        return symbol, "CALL", "🚀 FAST UPTREND (Ready)"
+    elif is_downtrend and is_red:
+        return symbol, "PUT", "📉 FAST DOWNTREND (Ready)"
 
-    # [8] No-signal Zone: ถ้าขัดแย้งกันชัดเจนถึงจะตัดเป็น NONE
-    if is_uptrend and is_green and (prev_green or is_green):
-        return symbol, "CALL", "🚀 RELAXED UPTREND (1,2,8,9)"
-    elif is_downtrend and is_red and (prev_red or is_red):
-        return symbol, "PUT", "📉 RELAXED DOWNTREND (1,2,8,9)"
+    return None, "NONE", "NO_SIGNAL"
 
-    return None, "NONE", "NO_SIGNAL_ZONE"
-
-def find_relaxed_signal():
+def find_fast_signal():
     for sym in SYMBOLS.keys():
-        symbol, direction, status = evaluate_relaxed_filters(sym)
+        symbol, direction, status = evaluate_fast_filters(sym)
         if direction != "NONE":
             return symbol, direction, status
     return None, "NONE", "NO_SIGNAL"
@@ -160,12 +128,11 @@ def auto_signal_broadcaster():
                         cooldown_status[chat_id] = "READY"
                         continue
 
-                    # Cooldown 35 วินาที เพื่อให้เกาะจังหวะได้ต่อเนื่อง
                     last_time = last_signal_time.get(chat_id, datetime.datetime.min)
-                    if (now - last_time).total_seconds() < 35:
+                    if (now - last_time).total_seconds() < 30:
                         continue
 
-                    sym, direction, status = find_relaxed_signal()
+                    sym, direction, status = find_fast_signal()
                     step = user_martingale_step.get(chat_id, 1)
                     
                     if sym and direction != "NONE":
@@ -178,7 +145,7 @@ def auto_signal_broadcaster():
                         btn_label = "CALL" if is_buy else "PUT"
 
                         card_text = (
-                            f"⚡ **TITAN RELAXED FOCUS 👑 M1**\n"
+                            f"⚡ **TITAN FAST-START 👑 M1**\n"
                             f"⚡ **TITAN AI Bot (VIP) [ไม้ {step}]**\n\n"
                             f"💸 **ให้เรากดคู่:** `{symbol_label}`\n"
                             f"💎 **Timeframe:** `M1`\n"
@@ -210,38 +177,12 @@ def auto_signal_broadcaster():
 # ==========================================
 # TELEGRAM BOT HANDLERS
 # ==========================================
-@bot.message_handler(commands=['email'])
-def register_email(message):
-    try:
-        args = message.text.split()
-        if len(args) < 3:
-            bot.reply_to(message, "⚠️ **กรุณาระบุอีเมลและรหัสผ่าน**\n👉 รูปแบบ: `/email <อีเมล> <รหัสผ่าน>`", parse_mode="Markdown")
-            return
-        email = args[1].lower().strip()
-        password = args[2].strip()
-        if check_user_approved(email, password):
-            user_creds[message.chat.id] = {"email": email, "password": password}
-            user_martingale_step[message.chat.id] = 1
-            active_chat_ids.add(message.chat.id)
-            bot.reply_to(message, "⚡ **TITAN RELAXED CONNECTED** ⚡\nพร้อมลุย สัญญาณมาต่อเนื่องแน่นอนครับ!", parse_mode="Markdown")
-        else:
-            bot.reply_to(message, "❌ **AUTHENTICATION FAILED** สิทธิ์เข้าถึงไม่ถูกต้อง", parse_mode="Markdown")
-    except Exception as e:
-        bot.reply_to(message, f"❌ Error: {e}", parse_mode="Markdown")
-
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     chat_id = message.chat.id
-    creds = user_creds.get(chat_id, {})
-    email = creds.get("email", "")
-    password = creds.get("password", "")
-
-    if not email or not password or not check_user_approved(email, password):
-        bot.send_message(chat_id, "⚡ **TITAN RELAXED BOT**\n\n🔒 กรุณายืนยันตัวตนก่อนใช้งาน:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", parse_mode="Markdown")
-        return
-
     active_chat_ids.add(chat_id)
-    bot.send_message(chat_id, "⚡ **TITAN RELAXED ONLINE**\nพร้อมส่งสัญญาณแบบสมดุลแล้วครับ!", parse_mode="Markdown")
+    user_martingale_step[chat_id] = 1
+    bot.send_message(chat_id, "⚡ **TITAN FAST-START ONLINE**\nเชื่อมต่อสำเร็จ! บอทพร้อมสแกนและส่งสัญญาณแล้วครับ!", parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
@@ -276,7 +217,7 @@ def handle_callbacks(call):
         bot.answer_callback_query(call.id, text)
 
 print("--------------------------------------------------")
-print("⚡ TITAN RELAXED FOCUS BOT พร้อมรัน...")
+print("⚡ TITAN FAST-START BOT พร้อมรัน...")
 print("--------------------------------------------------")
 
 broadcaster_thread = threading.Thread(target=auto_signal_broadcaster, daemon=True)
@@ -288,3 +229,4 @@ while True:
     except Exception as e:
         print(f"⚠️ Connection Error: {e} - Retrying in 5s...")
         time.sleep(5)
+        
