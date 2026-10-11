@@ -8,18 +8,14 @@ import requests
 import threading
 
 # ==========================================
-# API Token & Configuration (บอทตัวใหม่)
+# API Token & Configuration
 # ==========================================
 BOT_TOKEN = "8824803588:AAFdcAf-HzRrhtmWMNULQxYjXz-CHHHLk_g"
 bot = telebot.TeleBot(BOT_TOKEN)
 
-INTERVAL = "1m"
-user_stats = {}
-symbol_stats = {}
-user_martingale_step = {}
 active_chat_ids = set()
-cooldown_status = {}
-last_signal_time = {}
+user_martingale_step = {}
+user_stats = {}
 
 SYMBOLS = {
     "DYDXUSDT": "DYDX(OTC)",
@@ -59,7 +55,6 @@ def fetch_live_kline_data(symbol, interval="1m", limit=100):
             df['open'] = df['open'].astype(float)
             df['high'] = df['high'].astype(float)
             df['low'] = df['low'].astype(float)
-            df['volume'] = df['volume'].astype(float)
             return df
     except Exception:
         pass
@@ -72,112 +67,90 @@ def fetch_live_kline_data(symbol, interval="1m", limit=100):
     df['open'] = df['close'].shift(1).fillna(100.0)
     df['high'] = df[['open', 'close']].max(axis=1) + 0.1
     df['low'] = df[['open', 'close']].min(axis=1) - 0.1
-    df['volume'] = np.random.rand(size) * 1000
     return df
 
-def evaluate_fast_filters(symbol):
-    df = fetch_live_kline_data(symbol, interval="1m", limit=100)
-    df_m5 = fetch_live_kline_data(symbol, interval="5m", limit=50)
+def find_best_signal():
+    for sym, label in SYMBOLS.items():
+        df = fetch_live_kline_data(sym, interval="1m", limit=30)
+        if df is None or len(df) < 5:
+            continue
+        
+        last_open = float(df['open'].iloc[-1])
+        last_close = float(df['close'].iloc[-1])
+        
+        # เงื่อนไขตรวจจับง่ายขึ้นเพื่อให้ยิงสัญญาณได้ต่อเนื่อง
+        if last_close > last_open:
+            return sym, label, "CALL", "🚀 BULLISH MOMENTUM"
+        elif last_close < last_open:
+            return sym, label, "PUT", "📉 BEARISH MOMENTUM"
+            
+    return None, None, "NONE", "NO_SIGNAL"
 
-    if df is None or len(df) < 20 or df_m5 is None or len(df_m5) < 10:
-        return None, "NONE", "SKIPPED"
+def send_signal_to_chat(chat_id):
+    now = get_thai_time()
+    sym, label, direction, status = find_best_signal()
+    step = user_martingale_step.get(chat_id, 1)
 
-    df_m5['ema_20'] = df_m5['close'].ewm(span=20, adjust=False).mean()
-    m5_close = float(df_m5['close'].iloc[-1])
-    m5_ema20 = float(df_m5['ema_20'].iloc[-1])
-    
-    is_uptrend = m5_close > m5_ema20
-    is_downtrend = m5_close < m5_ema20
+    if sym and direction != "NONE":
+        target_time = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
+        target_time_str = target_time.strftime('%H:%M')
 
-    last_open = float(df['open'].iloc[-1])
-    last_close = float(df['close'].iloc[-1])
-    is_green = last_close > last_open
-    is_red = last_close < last_open
+        is_buy = (direction == "CALL")
+        dir_emoji = "⬆️ BUY 🟢" if is_buy else "⬇️ SELL 🔴"
+        btn_label = "CALL" if is_buy else "PUT"
 
-    if is_uptrend and is_green:
-        return symbol, "CALL", "🚀 FAST UPTREND (Ready)"
-    elif is_downtrend and is_red:
-        return symbol, "PUT", "📉 FAST DOWNTREND (Ready)"
+        card_text = (
+            f"⚡ **TITAN FAST ENGINE 👑 M1**\n"
+            f"⚡ **[ไม้ {step}]**\n\n"
+            f"💸 **คู่เงิน:** `{label}`\n"
+            f"💎 **Timeframe:** `M1`\n"
+            f"⌚ **เข้าออเดอร์เวลา:** `{target_time_str}`\n"
+            f"🚀 **คำสั่ง:** **{dir_emoji}**\n\n"
+            f"🛡️ **Status:** `{status}`"
+        )
 
-    return None, "NONE", "NO_SIGNAL"
-
-def find_fast_signal():
-    for sym in SYMBOLS.keys():
-        symbol, direction, status = evaluate_fast_filters(sym)
-        if direction != "NONE":
-            return symbol, direction, status
-    return None, "NONE", "NO_SIGNAL"
+        markup = InlineKeyboardMarkup(row_width=1)
+        markup.add(InlineKeyboardButton(f"🔥 EXECUTE {btn_label} 🔥", callback_data="do_nothing"))
+        markup.add(
+            InlineKeyboardButton("💎 ชนะไม้ 1", callback_data=f"res_win1_{sym}"),
+            InlineKeyboardButton("🥈 ชนะไม้ 2", callback_data=f"res_win2_{sym}"),
+            InlineKeyboardButton("🥉 ชนะไม้ 3", callback_data=f"res_win3_{sym}"),
+            InlineKeyboardButton("❌ แพ้ (LOSS)", callback_data=f"res_loss_{sym}")
+        )
+        bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
 
 def auto_signal_broadcaster():
-    last_sent_minute = -1
     while True:
         try:
             now = get_thai_time()
-            if now.second == 30 and now.minute != last_sent_minute:
-                last_sent_minute = now.minute
-                
+            # ส่งอัตโนมัติทุกๆ 1 นาทีที่วินาทีที่ 15-45
+            if now.second == 30:
                 for chat_id in list(active_chat_ids):
-                    state = cooldown_status.get(chat_id, "READY")
-                    if state == "WAITING_1_CANDLE":
-                        cooldown_status[chat_id] = "READY"
-                        continue
-
-                    last_time = last_signal_time.get(chat_id, datetime.datetime.min)
-                    if (now - last_time).total_seconds() < 30:
-                        continue
-
-                    sym, direction, status = find_fast_signal()
-                    step = user_martingale_step.get(chat_id, 1)
-                    
-                    if sym and direction != "NONE":
-                        symbol_label = SYMBOLS.get(sym, sym)
-                        target_time = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
-                        target_time_str = target_time.strftime('%H:%M')
-
-                        is_buy = (direction == "CALL")
-                        dir_emoji = "⬆️ BUY 🟢" if is_buy else "⬇️ SELL 🔴"
-                        btn_label = "CALL" if is_buy else "PUT"
-
-                        card_text = (
-                            f"⚡ **TITAN NEW BOT 👑 M1**\n"
-                            f"⚡ **[ไม้ {step}]**\n\n"
-                            f"💸 **ให้เรากดคู่:** `{symbol_label}`\n"
-                            f"💎 **Timeframe:** `M1`\n"
-                            f"⌚ **ตอนเวลา:** `{target_time_str}`\n"
-                            f"🚀 **Action:** **{dir_emoji}**\n\n"
-                            f"🛡️ **Status:** `{status}`"
-                        )
-
-                        markup = InlineKeyboardMarkup(row_width=1)
-                        markup.add(InlineKeyboardButton(f"🔥 EXECUTE {btn_label} 🔥", callback_data="do_nothing"))
-                        markup.add(
-                            InlineKeyboardButton("💎 ชนะไม้ 1", callback_data=f"res_win1_{sym}"),
-                            InlineKeyboardButton("🥈 ชนะไม้ 2", callback_data=f"res_win2_{sym}"),
-                            InlineKeyboardButton("🥉 ชนะไม้ 3", callback_data=f"res_win3_{sym}"),
-                            InlineKeyboardButton("❌ แพ้ (LOSS)", callback_data=f"res_loss_{sym}")
-                        )
-                        
-                        bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
-                        last_signal_time[chat_id] = now
-                        cooldown_status[chat_id] = "WAITING_1_CANDLE"
-
-            time.sleep(0.3)
+                    send_signal_to_chat(chat_id)
+            time.sleep(1)
         except Exception as e:
             print(f"⚠️ Broadcast Error: {e}")
-            time.sleep(1)
+            time.sleep(2)
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     chat_id = message.chat.id
     active_chat_ids.add(chat_id)
     user_martingale_step[chat_id] = 1
-    bot.send_message(chat_id, "⚡ **TITAN NEW BOT ONLINE**\nเชื่อมต่อบอทใหม่สำเร็จ พร้อมลุยแล้วครับ!", parse_mode="Markdown")
+    bot.send_message(chat_id, "⚡ **TITAN BOT ONLINE**\nเชื่อมต่อเรียบร้อย! พิมพ์ `/scan` เพื่อเรียกสัญญาณทันที หรือรอสัญญาณอัตโนมัติได้เลยครับ", parse_mode="Markdown")
+
+@bot.message_handler(commands=['scan'])
+def manual_scan(message):
+    chat_id = message.chat.id
+    active_chat_ids.add(chat_id)
+    bot.reply_to(message, "🔎 กำลังค้นหาสัญญาณสด...")
+    send_signal_to_chat(chat_id)
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     chat_id = call.message.chat.id
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ TITAN Signal Locked & Ready")
+        bot.answer_callback_query(call.id, "⚡ TITAN Signal Locked")
         return
 
     if call.data.startswith("res_"):
@@ -190,32 +163,28 @@ def handle_callbacks(call):
         if result_type in ["win1", "win2", "win3"]:
             user_stats[chat_id][result_type] += 1
             user_martingale_step[chat_id] = 1
-            text = "💎 TITAN Reset: กลับสู่ไม้ที่ 1 เรียบร้อย"
+            text = "💎 Reset: กลับสู่ไม้ที่ 1"
         elif result_type == "loss":
             step = user_martingale_step[chat_id]
             if step < 3:
                 user_martingale_step[chat_id] += 1
-                text = f"⚠️ ยกระดับการเดินเงินสู่ [ไม้ที่ {user_martingale_step[chat_id]}]"
+                text = f"⚠️ ปรับเงินสู่ [ไม้ที่ {user_martingale_step[chat_id]}]"
             else:
                 user_stats[chat_id]["loss"] += 1
                 user_martingale_step[chat_id] = 1
-                text = "❌ บันทึก Loss และรีเซ็ตกลับไม้ที่ 1"
+                text = "❌ Reset กลับไม้ที่ 1"
         else:
             text = "บันทึกเรียบร้อย"
             
         bot.answer_callback_query(call.id, text)
 
-print("--------------------------------------------------")
-print("⚡ TITAN NEW BOT พร้อมรัน...")
-print("--------------------------------------------------")
-
+print("⚡ TITAN BOT พร้อมรัน...")
 broadcaster_thread = threading.Thread(target=auto_signal_broadcaster, daemon=True)
 broadcaster_thread.start()
 
 while True:
     try:
         bot.polling(none_stop=True, interval=0, timeout=20)
-    except Exception as e:
-        print(f"⚠️ Connection Error: {e} - Retrying in 5s...")
+    except Exception:
         time.sleep(5)
-
+        
