@@ -8,9 +8,9 @@ import requests
 import threading
 
 # ==========================================
-# API Token & Configuration
+# API Token & Configuration (บอทตัวใหม่)
 # ==========================================
-BOT_TOKEN = "8822727043:AAEEKA96HNfVXO4CMYF7GxBTXq9q_uQhU4Y"
+BOT_TOKEN = "8824803588:AAFdcAf-HzRrhtmWMNULQxYjXz-CHHHLk_g"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 INTERVAL = "1m"
@@ -20,10 +20,6 @@ user_martingale_step = {}
 active_chat_ids = set()
 cooldown_status = {}
 last_signal_time = {}
-
-# รายชื่อ Admin หรือ Chat ID ที่อนุญาตให้ใช้งาน (ป้องกันพวกปัญญาอ่อนมากวน)
-# คุณสามารถใส่ ID Telegram ของตัวเองไว้ตรงนี้ หรือปล่อยผ่านระบบเปิดเฉพาะคนที่คุณอนุญาต
-ALLOWED_USER_IDS = set()  # ถ้าปล่อยว่าง ใครพิมพ์ /start คนแรกจะได้สิทธิ์ หรือเพิ่ม ID ตัวเองลงไปได้
 
 SYMBOLS = {
     "DYDXUSDT": "DYDX(OTC)",
@@ -143,7 +139,7 @@ def auto_signal_broadcaster():
                         btn_label = "CALL" if is_buy else "PUT"
 
                         card_text = (
-                            f"⚡ **TITAN SECURE BOT 👑 M1**\n"
+                            f"⚡ **TITAN NEW BOT 👑 M1**\n"
                             f"⚡ **[ไม้ {step}]**\n\n"
                             f"💸 **ให้เรากดคู่:** `{symbol_label}`\n"
                             f"💎 **Timeframe:** `M1`\n"
@@ -173,22 +169,9 @@ def auto_signal_broadcaster():
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     chat_id = message.chat.id
-    
-    # ระบบกรองคนแปลกหน้า / บล็อกพวกก่อกวน (ถ้าตั้งค่า ALLOWED_USER_IDS ไว้)
-    if ALLOWED_USER_IDS and chat_id not in ALLOWED_USER_IDS:
-        bot.reply_to(message, "⛔ **ACCESS DENIED:** คุณไม่มีสิทธิ์ใช้งานบอทรุ่นนี้ครับ!")
-        return
-
     active_chat_ids.add(chat_id)
     user_martingale_step[chat_id] = 1
-    bot.send_message(chat_id, "⚡ **TITAN SECURE BOT ONLINE**\nระบบปลอดภัย ไร้รอยต่อ พร้อมรับสัญญาณแล้วครับ!", parse_mode="Markdown")
-
-@bot.message_handler(func=lambda message: True)
-def handle_unknown(message):
-    chat_id = message.chat.id
-    # ถ้าพิมพ์ข้อความสะเปะสะปะเข้ามาโดยไม่ได้รับอนุญาตหรือนอกเหนือคำสั่ง จะถูกบล็อกการตอบโต้อัตโนมัติ
-    if chat_id not in active_chat_ids:
-        bot.reply_to(message, "⚠️ กรุณาพิมพ์ `/start` เพื่อเริ่มใช้งานระบบครับ", parse_mode="Markdown")
+    bot.send_message(chat_id, "⚡ **TITAN NEW BOT ONLINE**\nเชื่อมต่อบอทใหม่สำเร็จ พร้อมลุยแล้วครับ!", parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
@@ -223,7 +206,7 @@ def handle_callbacks(call):
         bot.answer_callback_query(call.id, text)
 
 print("--------------------------------------------------")
-print("⚡ TITAN SECURE BOT พร้อมรัน...")
+print("⚡ TITAN NEW BOT พร้อมรัน...")
 print("--------------------------------------------------")
 
 broadcaster_thread = threading.Thread(target=auto_signal_broadcaster, daemon=True)
@@ -235,3 +218,4 @@ while True:
     except Exception as e:
         print(f"⚠️ Connection Error: {e} - Retrying in 5s...")
         time.sleep(5)
+
