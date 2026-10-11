@@ -97,59 +97,47 @@ def fetch_live_kline_data(symbol, interval="1m", limit=100):
 def calculate_sma(series, period=14):
     return series.rolling(window=period).mean()
 
-def calculate_parabolic_sar(high, low):
+def calculate_parabolic_sar(high, low, close):
     sar_list = []
-    for i in range(len(high)):
-        sar_list.append(high.iloc[i] + 0.001 if i % 2 == 0 else low.iloc[i] - 0.001)
-    return pd.Series(sar_list, index=high.index)
-
-def calculate_stochastic(high, low, close, k_period=14, d_period=3):
-    lowest_low = low.rolling(window=k_period).min()
-    highest_high = high.rolling(window=k_period).max()
-    k_line = 100 * ((close - lowest_low) / (highest_high - lowest_low))
-    d_line = k_line.rolling(window=d_period).mean()
-    return k_line, d_line
+    for i in range(len(close)):
+        if close.iloc[i] >= close.iloc[i-1] if i > 0 else True:
+            sar_list.append(low.iloc[i] - 0.002)
+        else:
+            sar_list.append(high.iloc[i] + 0.002)
+    return pd.Series(sar_list, index=close.index)
 
 # ==========================================
-# MASTER-PRO ENGINE (SECURITY + SECRET TOOLS)
+# STRICT SAFETY FILTER + HIGHEST SCORE ENGINE
 # ==========================================
-def evaluate_symbol_master(symbol):
+def evaluate_symbol(symbol):
     df = fetch_live_kline_data(symbol, interval="1m", limit=100)
-    df_m5 = fetch_live_kline_data(symbol, interval="5m", limit=50)
-
-    # 1. ระบบกรองความปลอดภัยขั้นสูงสุด (กฎเหล็ก: ไม่ผ่าน = ตัดทิ้งทันที)
-    df_m5['ema_20'] = df_m5['close'].ewm(span=20, adjust=False).mean()
-    m5_close = float(df_m5['close'].iloc[-1])
-    m5_ema20 = float(df_m5['ema_20'].iloc[-1])
-    m5_is_uptrend = m5_close > m5_ema20
-
+    
+    # ------------------------------------------
+    # 1. ระบบกรองความปลอดภัย (กฎเหล็ก: ต้องผ่าน 100% ห้ามหลุด)
+    # ------------------------------------------
     recent_highs = df['high'].tail(30).max()
     recent_lows = df['low'].tail(30).min()
     current_price = float(df['close'].iloc[-1])
     
+    # ถ้าติดแนวต้าน/แนวรับ = ปัดตกทันที
     if abs(current_price - recent_highs) / current_price < 0.0003 or abs(current_price - recent_lows) / current_price < 0.0003:
-        return None, 0, "FAILED_FILTER"
+        return "NONE", 0, "FAILED_FILTER"
 
     df['body'] = abs(df['close'] - df['open'])
     df['range'] = df['high'] - df['low']
     last_body = float(df['body'].iloc[-1])
     last_range = float(df['range'].iloc[-1])
     
-    if last_range > 0 and (last_body / last_range) < 0.32:
-        return None, 0, "FAILED_FILTER"
+    # ถ้าไส้เทียนเยอะเกินไป (บอดี้ต่ำกว่า 30%) = ปัดตกทันที
+    if last_range > 0 and (last_body / last_range) < 0.30:
+        return "NONE", 0, "FAILED_FILTER"
 
-    # เครื่องมือเสริมลับ: Bollinger Bands Width กรองตลาดไซด์เวย์แคบ
-    df['bb_mid'] = df['close'].rolling(window=20).mean()
-    df['bb_std'] = df['close'].rolling(window=20).std()
-    df['bb_width'] = (df['bb_std'] * 4) / df['bb_mid']
-    if float(df['bb_width'].iloc[-1]) < 0.002: # ตลาดนิ่งเกินไป ห้ามเทรด
-        return None, 0, "FAILED_FILTER"
-
-    # 2. เงื่อนไขหลักของคุณ + เครื่องมือเสริม (EMA50 & Stochastic)
+    # ------------------------------------------
+    # 2. คำนวณคะแนนอินดิเคเตอร์ (เลือกคู่ที่คะแนนสูงสุด)
+    # ------------------------------------------
     df['ema_8'] = df['close'].ewm(span=8, adjust=False).mean()
-    df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()
     df['sma_14'] = calculate_sma(df['close'], period=14)
-    df['sar'] = calculate_parabolic_sar(df['high'], df['low'])
+    df['sar'] = calculate_parabolic_sar(df['high'], df['low'], df['close'])
     
     m_fast = df['close'].ewm(span=4, adjust=False).mean()
     m_slow = df['close'].ewm(span=9, adjust=False).mean()
@@ -157,48 +145,39 @@ def evaluate_symbol_master(symbol):
     df['macd_signal'] = df['macd_line'].ewm(span=4, adjust=False).mean()
     df['macd_hist'] = df['macd_line'] - df['macd_signal']
     
-    k_line, d_line = calculate_stochastic(df['high'], df['low'], df['close'])
-
     ema8 = float(df['ema_8'].iloc[-1])
-    ema50 = float(df['ema_50'].iloc[-1])
     sma14 = float(df['sma_14'].iloc[-1])
     sar_val = float(df['sar'].iloc[-1])
     macd_hist_curr = float(df['macd_hist'].iloc[-1])
     macd_hist_prev = float(df['macd_hist'].iloc[-2])
-    stoch_k = float(k_line.iloc[-1])
-    stoch_d = float(d_line.iloc[-1])
-
-    # ให้คะแนนความสอดคล้อง
-    put_score = 0
-    if ema8 < sma14: put_score += 1
-    if sar_val > current_price: put_score += 1
-    if macd_hist_curr < macd_hist_prev: put_score += 1
-    if current_price < ema50: put_score += 1
-    if stoch_k < stoch_d: put_score += 1
-
+    
+    # ให้คะแนนฝั่ง CALL (สูงสุด 3 คะแนน)
     call_score = 0
     if ema8 > sma14: call_score += 1
     if sar_val < current_price: call_score += 1
     if macd_hist_curr > macd_hist_prev: call_score += 1
-    if current_price > ema50: call_score += 1
-    if stoch_k > stoch_d: call_score += 1
 
-    if call_score >= put_score and call_score >= 3 and m5_is_uptrend:
-        accuracy = 96.5 + (call_score * 0.7)
-        return "CALL", min(accuracy, 99.8), "PASSED"
-    elif put_score > call_score and put_score >= 3 and (not m5_is_uptrend):
-        accuracy = 96.5 + (put_score * 0.7)
-        return "PUT", min(accuracy, 99.8), "PASSED"
-    
-    return None, 0, "PASSED"
+    # ให้คะแนนฝั่ง PUT (สูงสุด 3 คะแนน)
+    put_score = 0
+    if ema8 < sma14: put_score += 1
+    if sar_val > current_price: put_score += 1
+    if macd_hist_curr < macd_hist_prev: put_score += 1
 
-def find_best_master_signal():
+    if call_score >= put_score and call_score > 0:
+        return "CALL", call_score, "PASSED"
+    elif put_score > call_score and put_score > 0:
+        return "PUT", put_score, "PASSED"
+        
+    return "NONE", 0, "PASSED"
+
+def find_best_signal():
     best_symbol = None
     best_direction = "NONE"
     highest_score = 0
 
     for sym in SYMBOLS.keys():
-        direction, score, status = evaluate_symbol_master(sym)
+        direction, score, status = evaluate_symbol(sym)
+        # ต้องผ่านระบบกรองความปลอดภัยเท่านั้น ถึงนำมาคิดคะแนน
         if status == "PASSED" and direction != "NONE":
             if score > highest_score:
                 highest_score = score
@@ -225,7 +204,7 @@ def auto_signal_broadcaster():
                         cooldown_status[chat_id] = "READY"
                         continue
 
-                    sym, direction, score = find_best_master_signal()
+                    sym, direction, score = find_best_signal()
                     step = user_martingale_step.get(chat_id, 1)
                     
                     if sym and direction != "NONE":
@@ -238,13 +217,13 @@ def auto_signal_broadcaster():
                         btn_label = "CALL" if is_buy else "PUT"
 
                         card_text = (
-                            f"⚡ **TITAN Master-Pro Ultimate 👑 M1**\n"
+                            f"⚡ **TITAN Strict Safety + Best Match 👑 M1**\n"
                             f"⚡ **TITAN AI Bot (VIP) [ไม้ {step}]**\n\n"
                             f"💸 **ให้เรากดคู่:** `{symbol_label}`\n"
                             f"💎 **Timeframe:** `M1`\n"
                             f"⌚ **ตอนเวลา:** `{target_time_str}`\n"
                             f"🚀 **Action:** **{dir_emoji}**\n\n"
-                            f"📊 **Accuracy:** `{score:.1f}%`"
+                            f"📊 **Indicator Match:** `{score}/3 Conditions`"
                         )
 
                         markup = InlineKeyboardMarkup(row_width=1)
@@ -285,7 +264,7 @@ def register_email(message):
             user_creds[message.chat.id] = {"email": email, "password": password}
             user_martingale_step[message.chat.id] = 1
             active_chat_ids.add(message.chat.id)
-            bot.reply_to(message, "⚡ **TITAN MASTER-PRO CONNECTED** ⚡\nระบบกรองความปลอดภัย + เครื่องมือลับขั้นเทพพร้อมลุย!", parse_mode="Markdown")
+            bot.reply_to(message, "⚡ **TITAN ENGINE CONNECTED** ⚡\nระบบกรองความปลอดภัยเข้มงวด 100% + คัดเลือกคู่คะแนนสูงสุดพร้อมลุย!", parse_mode="Markdown")
         else:
             bot.reply_to(message, "❌ **AUTHENTICATION FAILED** สิทธิ์เข้าถึงไม่ถูกต้อง", parse_mode="Markdown")
     except Exception as e:
@@ -299,11 +278,11 @@ def send_welcome(message):
     password = creds.get("password", "")
 
     if not email or not password or not check_user_approved(email, password):
-        bot.send_message(chat_id, "⚡ **TITAN MASTER-PRO BOT**\n\n🔒 กรุณายืนยันตัวตนก่อนใช้งาน:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", parse_mode="Markdown")
+        bot.send_message(chat_id, "⚡ **TITAN BOT**\n\n🔒 กรุณายืนยันตัวตนก่อนใช้งาน:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", parse_mode="Markdown")
         return
 
     active_chat_ids.add(chat_id)
-    bot.send_message(chat_id, "⚡ **TITAN MASTER-PRO ONLINE**\nพร้อมสแกนด้วยระบบเครื่องมือเสริมระดับโปรเรียบร้อยครับ!", parse_mode="Markdown")
+    bot.send_message(chat_id, "⚡ **TITAN ONLINE**\nระบบกรองความปลอดภัยยืนหนึ่ง พร้อมคัดเลือกคู่ที่ดีที่สุดอัตโนมัติครับ!", parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
@@ -338,7 +317,7 @@ def handle_callbacks(call):
         bot.answer_callback_query(call.id, text)
 
 print("--------------------------------------------------")
-print("⚡ TITAN MASTER-PRO ULTIMATE BOT พร้อมรัน...")
+print("⚡ TITAN STRICT SAFETY + HIGHEST SCORE BOT พร้อมรัน...")
 print("--------------------------------------------------")
 
 broadcaster_thread = threading.Thread(target=auto_signal_broadcaster, daemon=True)
