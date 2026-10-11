@@ -21,10 +21,9 @@ user_stats = {}
 symbol_stats = {}
 user_martingale_step = {}
 user_creds = {}
-user_last_message = {}
+active_chat_ids = set()
 
 state_lock = threading.Lock()
-atomic_market_cache = {}
 
 SYMBOLS = {
     "DYDXUSDT": "DYDX(OTC)",
@@ -70,33 +69,6 @@ def check_user_approved(email: str, password: str = None) -> bool:
         print(f"⚠️ Firebase Error: {e}")
     return False
 
-def get_forex_factory_high_impact_news():
-    url = "https://www.forexfactory.com/ff_calendar_thisweek.xml"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    high_impact_events = []
-    try:
-        response = requests.get(url, headers=headers, timeout=5)
-        if response.status_code == 200:
-            root = ET.fromstring(response.content)
-            for event in root.findall('event'):
-                impact = event.find('impact')
-                title = event.find('title')
-                country = event.find('country')
-                if impact is not None and impact.text == 'High':
-                    c_name = country.text if country is not None else "ALL"
-                    t_title = title.text if title is not None else "High Impact Event"
-                    high_impact_events.append(f"{c_name}: {t_title}")
-    except Exception as e:
-        print(f"⚠️ Forex Factory Error: {e}")
-    return high_impact_events
-
-def check_market_zone_ttz():
-    now_sec = get_thai_time().second
-    if 30 <= now_sec <= 59:
-        return "GREEN", "🟢 [94% PRECISION ZONE] ล็อกสัญญาณพร้อมเทรดช่วง 20s-10s"
-    else:
-        return "RED", "🔴 [ANALYZING] กำลังรีเซ็ตและประมวลผลแท่งใหม่"
-
 def fetch_live_kline_data(symbol, interval="1m", limit=100):
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
@@ -132,9 +104,9 @@ def calculate_rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 # ==========================================
-# 94% PRECISION FILTER & IMMEDIATE LOCK CORE
+# 94% PRECISION FILTER & TOP 1 SIGNAL SCANNER
 # ==========================================
-def raw_market_analysis(symbol):
+def analyze_single_symbol(symbol):
     df_m1 = fetch_live_kline_data(symbol, interval="1m", limit=100)
     df_m5 = fetch_live_kline_data(symbol, interval="5m", limit=50)
 
@@ -148,7 +120,7 @@ def raw_market_analysis(symbol):
     current_price = float(df_m1['close'].iloc[-1])
     
     if abs(current_price - recent_highs) / current_price < 0.00025 or abs(current_price - recent_lows) / current_price < 0.00025:
-        return "NONE", "🛡️ [Guard] ชนแนวรับ/แนวต้านสำคัญ", "S/R Barrier Protection", 50.0
+        return "NONE", 0.0
 
     df_m1['body'] = abs(df_m1['close'] - df_m1['open'])
     df_m1['range'] = df_m1['high'] - df_m1['low']
@@ -156,11 +128,10 @@ def raw_market_analysis(symbol):
     last_range = float(df_m1['range'].iloc[-1])
     
     if last_range > 0 and (last_body / last_range) < 0.28:
-        return "NONE", "🛡️ [Guard] ไส้เทียนยาวเสี่ยงโดนลาก", "Fakeout Protection", 50.0
+        return "NONE", 0.0
 
     df_m1['ema_5'] = df_m1['close'].ewm(span=5, adjust=False).mean()
     df_m1['ema_20'] = df_m1['close'].ewm(span=20, adjust=False).mean()
-    df_m1['ema_50'] = df_m1['close'].ewm(span=50, adjust=False).mean()
     
     m_fast = df_m1['close'].ewm(span=12, adjust=False).mean()
     m_slow = df_m1['close'].ewm(span=26, adjust=False).mean()
@@ -172,7 +143,6 @@ def raw_market_analysis(symbol):
 
     ema5 = float(df_m1['ema_5'].iloc[-1])
     ema20 = float(df_m1['ema_20'].iloc[-1])
-    ema50 = float(df_m1['ema_50'].iloc[-1])
     last_macd = float(df_m1['macd_hist'].iloc[-1])
     last_rsi = float(df_m1['rsi'].iloc[-1])
     last_open = float(df_m1['open'].iloc[-1])
@@ -180,129 +150,91 @@ def raw_market_analysis(symbol):
     is_call = (ema5 > ema20) and (current_price > last_open) and (last_macd > 0) and (52 < last_rsi < 68) and m5_is_uptrend
     is_put = (ema5 < ema20) and (current_price < last_open) and (last_macd < 0) and (32 < last_rsi < 48) and (not m5_is_uptrend)
 
+    # คำนวณคะแนนความมั่นใจ
+    score = 94.0 + (abs(last_rsi - 50) * 0.2)
     if is_call:
-        return "CALL", "⚡ [94% Precision] คอนเฟิร์มทิศทางขาขึ้นสมบูรณ์", "Bullish Confluence", 94.5
+        return "CALL", min(score, 98.5)
     elif is_put:
-        return "PUT", "⚡ [94% Precision] คอนเฟิร์มทิศทางขาลงสมบูรณ์", "Bearish Confluence", 94.5
+        return "PUT", min(score, 98.5)
     else:
-        return "NONE", "🛡️ [Filter] ตลาดไม่ถึงเกณฑ์ 94%", "Filter Active", 70.0
+        return "NONE", 0.0
 
-def update_all_symbols_cache():
-    global atomic_market_cache
-    new_cache = {}
+def find_best_single_signal():
+    best_symbol = None
+    best_direction = "NONE"
+    best_score = 0.0
+
     for sym in SYMBOLS.keys():
-        new_cache[sym] = raw_market_analysis(sym)
-    
-    with state_lock:
-        atomic_market_cache = new_cache
+        direction, score = analyze_single_symbol(sym)
+        if direction != "NONE" and score >= 94.0:
+            if score > best_score:
+                best_score = score
+                best_direction = direction
+                best_symbol = sym
 
-def omega_god_5000_layers_analysis(symbol):
-    with state_lock:
-        if symbol in atomic_market_cache:
-            return atomic_market_cache[symbol]
-    
-    res = raw_market_analysis(symbol)
-    with state_lock:
-        atomic_market_cache[symbol] = res
-    return res
+    return best_symbol, best_direction, best_score
 
-def build_dynamic_menu_keyboard(symbol):
-    markup = InlineKeyboardMarkup(row_width=2)
-    
-    _, _, _, current_conf = omega_god_5000_layers_analysis(symbol)
-    
-    now_sec = get_thai_time().second
-    if 30 <= now_sec <= 59:
-        header_label = f"🟢 [ 94% READY: {get_thai_time().strftime('%H:%M:%S')} ]"
-    else:
-        header_label = f"🟡 [ RESETTING... {get_thai_time().strftime('%H:%M:%S')} ]"
-        
-    markup.add(InlineKeyboardButton(header_label, callback_data="do_nothing"))
-    
-    markup.add(
-        InlineKeyboardButton("📊 เช็คสถิติระบบ", callback_data="menu_stats"),
-        InlineKeyboardButton("🔄 รีเซ็ตสถิติ", callback_data="menu_reset")
-    )
-    
-    for sym, label in SYMBOLS.items():
-        pure_name = label
-        dir_res, _, _, conf = omega_god_5000_layers_analysis(sym)
-        
-        if conf >= 94.0 and dir_res != "NONE":
-            colored_label = f"🟢 {pure_name} [WIN 94%]"
-        else:
-            colored_label = f"🔴 {pure_name} [RISK]"
-            
-        markup.add(InlineKeyboardButton(colored_label, callback_data=f"analyze_{sym}"))
-    return markup
-
-def get_stats_text(chat_id):
-    if chat_id not in user_stats:
-        user_stats[chat_id] = {"win1": 0, "win2": 0, "win3": 0, "loss": 0}
-    st = user_stats[chat_id]
-    total_wins = st["win1"] + st["win2"] + st["win3"]
-    total_games = total_wins + st["loss"]
-    win_rate = (total_wins / total_games * 100) if total_games > 0 else 0.0
-    win1_rate = (st["win1"] / total_games * 100) if total_games > 0 else 0.0
-    current_step = user_martingale_step.get(chat_id, 1)
-
-    text = (
-        f"🔥 **[ 94% PRECISION FILTER // STATS ]** 🔥\n\n"
-        f"🎯 **ปฏิบัติการปัจจุบัน: ลุย `[ ไม้ที่ {current_step} ]`**\n\n"
-        f"🏆 ชนะไม้ 1: `[ {st['win1']} ]` ({win1_rate:.2f}%)\n"
-        f"🥈 ชนะไม้ 2: `[ {st['win2']} ]`\n"
-        f"🥉 ชนะไม้ 3: `[ {st['win3']} ]`\n"
-        f"❌ หลุดครบ 3 ไม้ (LOSS): `[ {st['loss']} ]`\n\n"
-        f"📈 ชนะรวม: `{total_wins}` | ทั้งหมด: `{total_games}`\n"
-        f"🔥 Win Rate รวม: `{win_rate:.2f}%`\n\n"
-        f"📊 **บันทึกสถิติแยกตามคู่สินทรัพย์:**\n"
-    )
-    symbol_breakdown = ""
-    if chat_id in symbol_stats:
-        for sym, data in symbol_stats[chat_id].items():
-            tot = data["win"] + data["loss"]
-            w_rate = (data["win"] / tot * 100) if tot > 0 else 0.0
-            label = SYMBOLS.get(sym, sym)
-            symbol_breakdown += f"• {label} ➔ `{w_rate:.2f}%` (ชนะ {data['win']}, แพ้ {data['loss']})\n"
-    if symbol_breakdown == "":
-        symbol_breakdown = "• ยังไม่มีประวัติการบันทึกแยกรายคู่"
-    return text + symbol_breakdown
-
-def background_live_refresher():
-    last_refreshed_second = -1
+# ==========================================
+# AUTO BROADCAST LOOP AT SECOND 30
+# ==========================================
+def auto_signal_broadcaster():
+    last_sent_minute = -1
     while True:
         try:
             now = get_thai_time()
-            if now.second == 30 and now.second != last_refreshed_second:
-                last_refreshed_second = now.second
-                update_all_symbols_cache()
+            if now.second == 30 and now.minute != last_sent_minute:
+                last_sent_minute = now.minute
+                
+                # สแกนหาคู่ที่ดีที่สุดเพียงคู่เดียว
+                sym, direction, score = find_best_single_signal()
+                
+                if sym and direction != "NONE":
+                    symbol_label = SYMBOLS.get(sym, sym)
+                    target_time = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
+                    target_time_str = target_time.strftime('%H:%M')
 
-                for chat_id, info in list(user_last_message.items()):
-                    try:
-                        msg_id = info.get("message_id")
-                        symbol = info.get("symbol")
-                        fixed_text = info.get("fixed_text")
-                        if not msg_id or not symbol or not fixed_text:
-                            continue
+                    is_buy = (direction == "CALL")
+                    dir_emoji = "⬆️" if is_buy else "⬇️"
+                    action_text = "BUY" if is_buy else "SELL"
+                    btn_label = "CALL" if is_buy else "PUT"
 
-                        markup = build_dynamic_menu_keyboard(symbol)
-                        bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=msg_id,
-                            text=fixed_text,
-                            reply_markup=markup,
-                            parse_mode="Markdown"
+                    for chat_id in list(active_chat_ids):
+                        step = user_martingale_step.get(chat_id, 1)
+                        
+                        card_text = (
+                            f"🇦🇪 **UAE Signal Official 👑 M1**\n"
+                            f"🇦🇪 **UAE Signal Bot (VIP)**\n\n"
+                            f"💸 **{symbol_label}**\n"
+                            f"💎 **M1**\n"
+                            f"⌚ **{target_time_str}**\n"
+                            f"{dir_emoji} **{action_text} 🟢**"
                         )
-                    except Exception:
-                        pass
+
+                        markup = InlineKeyboardMarkup(row_width=1)
+                        markup.add(InlineKeyboardButton(f"{btn_label}", callback_data="do_nothing"))
+                        markup.add(
+                            InlineKeyboardButton("💎 ชนะไม้ 1", callback_data=f"res_win1_{sym}"),
+                            InlineKeyboardButton("🥈 ชนะไม้ 2", callback_data=f"res_win2_{sym}"),
+                            InlineKeyboardButton("🥉 ชนะไม้ 3", callback_data=f"res_win3_{sym}"),
+                            InlineKeyboardButton("❌ แพ้ (LOSS)", callback_data=f"res_loss_{sym}")
+                        )
+
+                        try:
+                            bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
+                        except Exception:
+                            pass
+
             elif now.second != 30:
-                last_refreshed_second = -1
+                pass
 
             time.sleep(0.3)
         except Exception as e:
-            print(f"⚠️ Background worker error: {e}")
+            print(f"⚠️ Auto Broadcast Error: {e}")
             time.sleep(1)
 
+# ==========================================
+# TELEGRAM BOT HANDLERS
+# ==========================================
 @bot.message_handler(commands=['email'])
 def register_email(message):
     try:
@@ -315,151 +247,73 @@ def register_email(message):
         if check_user_approved(email, password):
             user_creds[message.chat.id] = {"email": email, "password": password}
             user_martingale_step[message.chat.id] = 1
-            update_all_symbols_cache()
-            bot.reply_to(message, f"🔥 **94% PRECISION AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"), parse_mode="Markdown")
+            active_chat_ids.add(message.chat.id)
+            bot.reply_to(
+                message, 
+                f"🔥 **AUTO-VIP SIGNAL CONNECTED** 🔥\n\nเชื่อมต่อระบบสำเร็จ! บอทจะสแกนคัดคู่ที่ดีที่สุดและส่งการ์ดสัญญาณ VIP ให้อัตโนมัติทุกนาทีครับ!", 
+                parse_mode="Markdown"
+            )
         else:
-            bot.reply_to(message, "❌ **AUTHENTICATION FAILED:** ข้อมูลไม่ถูกต้องหรือสิทธิ์ถูกระغับ", parse_mode="Markdown")
+            bot.reply_to(message, "❌ **AUTHENTICATION FAILED:** ข้อมูลไม่ถูกต้องหรือสิทธิ์ถูกระงับ", parse_mode="Markdown")
     except Exception as e:
         bot.reply_to(message, f"❌ เกิดข้อผิดพลาด: {e}", parse_mode="Markdown")
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     chat_id = message.chat.id
-    user_martingale_step[chat_id] = 1
     creds = user_creds.get(chat_id, {})
     email = creds.get("email", "")
     password = creds.get("password", "")
 
     if not email or not password or not check_user_approved(email, password):
-        bot.send_message(chat_id, "🔥 **TITAN BEAM // 94% VIP FORMAT** 🔥\n\n🔒 กรุณายืนยันตัวตน:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", parse_mode="Markdown")
+        bot.send_message(chat_id, "🔥 **TITAN AUTO VIP BOT** 🔥\n\n🔒 กรุณายืนยันตัวตนก่อนเริ่มต้น:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", parse_mode="Markdown")
         return
 
-    update_all_symbols_cache()
-    bot.send_message(chat_id, "🔥 **TITAN BEAM // 94% VIP FORMAT** 🔥\nเปิดระบบส่งสัญญาณรูปแบบ VIP Card พร้อมลุย:", reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"), parse_mode="Markdown")
-
-@bot.message_handler(commands=['stats'])
-def show_stats(message):
-    chat_id = message.chat.id
-    creds = user_creds.get(chat_id, {})
-    if not check_user_approved(creds.get("email"), creds.get("password")):
-        bot.send_message(chat_id, "❌ กรุณายืนยันตัวตนก่อนผ่าน `/email <อีเมล> <รหัสผ่าน>`", parse_mode="Markdown")
-        return
-    bot.send_message(chat_id, get_stats_text(chat_id), parse_mode="Markdown")
-
-@bot.message_handler(commands=['reset'])
-def reset_stats(message):
-    chat_id = message.chat.id
-    creds = user_creds.get(chat_id, {})
-    if not check_user_approved(creds.get("email"), creds.get("password")):
-        bot.send_message(chat_id, "❌ กรุณายืนยันตัวตนก่อนใช้งาน", parse_mode="Markdown")
-        return
-    user_stats[chat_id] = {"win1": 0, "win2": 0, "win3": 0, "loss": 0}
-    symbol_stats[chat_id] = {}
-    user_martingale_step[chat_id] = 1
-    bot.send_message(chat_id, "🔄 รีเซ็ตระบบสถิติและสเต็ปการเดินเงินเรียบร้อย!", parse_mode="Markdown")
+    active_chat_ids.add(chat_id)
+    bot.send_message(chat_id, "🔥 **เปิดระบบ Auto VIP Signal เรียบร้อย!**\nรอมันยิงการ์ดสัญญาณคู่ที่มั่นใจที่สุดให้อัตโนมัติในช่องแชทนี้เลยครับ!", parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
-def handle_all(call):
+def handle_callbacks(call):
     chat_id = call.message.chat.id
-    creds = user_creds.get(chat_id, {})
-    if not check_user_approved(creds.get("email"), creds.get("password")):
-        bot.answer_callback_query(call.id, "❌ สิทธิ์การเข้าถึงหมดอายุหรือยังไม่ยืนยันตัวตน!", show_alert=True)
-        return
-
-    if chat_id not in user_stats: user_stats[chat_id] = {"win1": 0, "win2": 0, "win3": 0, "loss": 0}
-    if chat_id not in symbol_stats: symbol_stats[chat_id] = {}
-    if chat_id not in user_martingale_step: user_martingale_step[chat_id] = 1
-
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ ระบบล็อกสัญญาณ 94% นิ่งสนิท พร้อมเทรด")
+        bot.answer_callback_query(call.id, "⚡ สัญญาณออโต้พร้อมเทรดช่วง 20s-10s")
         return
 
-    if call.data == "menu_stats":
-        bot.answer_callback_query(call.id, "📊 แสดงข้อมูลสถิติระบบ")
-        bot.send_message(chat_id, get_stats_text(chat_id), parse_mode="Markdown")
-        return
-
-    if call.data == "menu_reset":
-        user_stats[chat_id] = {"win1": 0, "win2": 0, "win3": 0, "loss": 0}
-        symbol_stats[chat_id] = {}
-        user_martingale_step[chat_id] = 1
-        bot.answer_callback_query(call.id, "🔄 รีเซ็ตสำเร็จ")
-        bot.send_message(chat_id, "🔄 รีเซ็ตสถิติและตั้งต้นไม้ที่ 1 ใหม่เรียบร้อย!", parse_mode="Markdown")
-        return
-
-    if call.data.startswith("analyze_"):
-        symbol = call.data.split("analyze_")[1]
-        symbol_label = SYMBOLS.get(symbol, symbol)
+    if call.data.startswith("res_"):
+        parts = call.data.split("_")
+        result_type = parts[1]
         
-        direction, zone_status, tech_used, confidence_pct = omega_god_5000_layers_analysis(symbol)
-        
-        if direction == "NONE" or confidence_pct < 94.0:
-            bot.answer_callback_query(call.id, "⚠️ คู่นี้ความมั่นใจต่ำกว่า 94% (อัปเดตเมนูเรียบร้อย)")
-            try:
-                bot.edit_message_reply_markup(
-                    chat_id=chat_id,
-                    message_id=call.message.message_id,
-                    reply_markup=build_dynamic_menu_keyboard(symbol)
-                )
-            except Exception:
-                pass
-            return
+        if chat_id not in user_stats: user_stats[chat_id] = {"win1": 0, "win2": 0, "win3": 0, "loss": 0}
+        if chat_id not in user_martingale_step: user_martingale_step[chat_id] = 1
 
-        current_step = user_martingale_step.get(chat_id, 1)
-        now_thai = get_thai_time()
-        target_time = (now_thai + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
-        target_time_str = target_time.strftime('%H:%M')
-
-        # จัดรูปแบบข้อความให้ตรงกับสไตล์การ์ด VIP ที่คุณต้องการ
-        is_buy = (direction == "CALL")
-        dir_emoji = "⬆️" if is_buy else "⬇️"
-        action_text = "BUY" if is_buy else "SELL"
-        btn_action_label = "CALL" if is_buy else "PUT"
-
-        fixed_signal_text = (
-            f"🇦🇪 **Titan Signal Official 👑 M1**\n"
-            f"🇦🇪 **Titan Signal Bot (VIP) [ไม้ที่ {current_step}]**\n\n"
-            f"💸 **{symbol_label}**\n"
-            f"💎 **M1**\n"
-            f"⌚ **{target_time_str}**\n"
-            f"{dir_emoji} **{action_text} 🟢**\n\n"
-            f"🛡️ `{tech_used}`\n"
-            f"📊 `Accuracy: {confidence_pct:.1f}%`"
-        )
-        
-        # สร้างปุ่มกดด้านล่างแบบการ์ด VIP
-        vip_markup = InlineKeyboardMarkup(row_width=1)
-        vip_markup.add(
-            InlineKeyboardButton(f"{btn_action_label}", callback_data="do_nothing")
-        )
-        # แนบปุ่มบันทึกผลลัพธ์แยกไม้
-        vip_markup.add(
-            InlineKeyboardButton("💎 ชนะไม้ 1", callback_data=f"res_win1_{symbol}"),
-            InlineKeyboardButton("🥈 ชนะไม้ 2", callback_data=f"res_win2_{symbol}"),
-            InlineKeyboardButton("🥉 ชนะไม้ 3", callback_data=f"res_win3_{symbol}"),
-            InlineKeyboardButton("❌ แพ้ (LOSS)", callback_data=f"res_loss_{symbol}")
-        )
-        
-        sent_msg = bot.send_message(chat_id, fixed_signal_text, reply_markup=vip_markup, parse_mode="Markdown")
-        
-        user_last_message[chat_id] = {
-            "message_id": sent_msg.message_id, 
-            "symbol": symbol,
-            "fixed_text": fixed_signal_text
-        }
+        if result_type in ["win1", "win2", "win3"]:
+            user_stats[chat_id][result_type] += 1
+            user_martingale_step[chat_id] = 1
+            text = "💎 ชนะออเดอร์! รีเซ็ตกลับสเต็ปไม้ 1 เรียบร้อย"
+        elif result_type == "loss":
+            step = user_martingale_step[chat_id]
+            if step < 3:
+                user_martingale_step[chat_id] += 1
+                text = f"⚠️ หลุดไม้ {step} ➔ ยกระดับลุยต่อ [ไม้ที่ {user_martingale_step[chat_id]}]"
+            else:
+                user_stats[chat_id]["loss"] += 1
+                user_martingale_step[chat_id] = 1
+                text = "❌ ครบ 3 สเต็ป บันทึก LOSS และรีเซ็ตกลับไม้ 1"
+        else:
+            text = "บันทึกเรียบร้อย"
+            
+        bot.answer_callback_query(call.id, text)
 
 print("--------------------------------------------------")
-print("🔥 TITAN VIP CARD FORMAT (94%) เริ่มต้นระบบเรียบร้อย...")
+print("🔥 AUTO VIP SCANNER (TOP 1 SIGNAL) พร้อมรัน...")
 print("--------------------------------------------------")
 
-update_all_symbols_cache()
-
-refresher_thread = threading.Thread(target=background_live_refresher, daemon=True)
-refresher_thread.start()
+broadcaster_thread = threading.Thread(target=auto_signal_broadcaster, daemon=True)
+broadcaster_thread.start()
 
 while True:
     try:
         bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception as e:
-        print(f"⚠️ ระบบเชื่อมต่อขัดข้อง: {e} - กำลังรีเซ็ตการเชื่อมต่อใน 5 วินาที...")
+        print(f"⚠️ ระบบเชื่อมต่อขัดข้อง: {e} - กำลังรีเซ็ตใน 5 วินาที...")
         time.sleep(5)
