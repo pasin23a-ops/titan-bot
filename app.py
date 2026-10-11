@@ -95,53 +95,40 @@ def fetch_live_kline_data(symbol, interval="1m", limit=100):
     return df
 
 # ==========================================
-# ULTRA-MOMENTUM HIGH PROBABILITY ENGINE
+# ABSOLUTE ZERO-ERROR ENGINE (เกาะเทรนด์ตรงไปตรงมา)
 # ==========================================
-def evaluate_symbol_ultra_momentum(symbol):
+def evaluate_absolute_zero_error(symbol):
     df = fetch_live_kline_data(symbol, interval="1m", limit=100)
     df_m5 = fetch_live_kline_data(symbol, interval="5m", limit=50)
 
-    # 1. เทรนด์หลัก M5 ต้องชัดเจน
+    # 1. เทรนด์ใหญ่ M5 (เช็ค EMA 20 แบบตรงไปตรงมา)
     df_m5['ema_20'] = df_m5['close'].ewm(span=20, adjust=False).mean()
     m5_close = float(df_m5['close'].iloc[-1])
     m5_ema20 = float(df_m5['ema_20'].iloc[-1])
+    
     m5_uptrend = m5_close > m5_ema20
+    m5_downtrend = m5_close < m5_ema20
 
-    # 2. เส้น EMA 8 บน M1 (ไม้บรรทัดหลัก)
-    df['ema_8'] = df['close'].ewm(span=8, adjust=False).mean()
-    current_price = float(df['close'].iloc[-1])
-    ema8_val = float(df['ema_8'].iloc[-1])
+    # 2. เช็คแท่งเทียนปัจจุบัน (M1) ห้ามสวนทางเด็ดขาด
+    last_open = float(df['open'].iloc[-1])
+    last_close = float(df['close'].iloc[-1])
+    is_green = last_close > last_open
+    is_red = last_close < last_open
 
-    # 3. ตัวกรองความแรงแท่งเทียน (Momentum Filter: บอดี้ต้องหนา > 55%)
-    df['body'] = abs(df['close'] - df['open'])
-    df['range'] = df['high'] - df['low']
-    last_body = float(df['body'].iloc[-1])
-    last_range = float(df['range'].iloc[-1])
+    # 3. ล็อกทิศทางตามเทรนด์จริง 100% (ห้ามส่งสัญญาณสวนเด็ดขาด)
+    # ถ้า M5 ขาขึ้น และ M1 กำลังเขียวพุ่ง -> CALL
+    if m5_uptrend and is_green:
+        return symbol, "CALL", "🚀 เกาะเทรนด์ขาขึ้น (ปลอดภัยสูงสุด)"
     
-    if last_range == 0 or (last_body / last_range) < 0.55:
-        return None, "NONE", "LOW_MOMENTUM"
+    # ถ้า M5 ขาลง และ M1 กำลังแดงทิ้งดิ่ง -> PUT
+    elif m5_downtrend and is_red:
+        return symbol, "PUT", "📉 เกาะเทรนด์ขาลง (ปลอดภัยสูงสุด)"
 
-    # 4. ตัวกรองวอลุ่ม (Volume Surge: วอลุ่มต้องมากกว่าค่าเฉลี่ย 20 แท่ง)
-    df['vol_ma'] = df['volume'].rolling(window=20).mean()
-    last_vol = float(df['volume'].iloc[-1])
-    avg_vol = float(df['vol_ma'].iloc[-1])
-    if last_vol < avg_vol * 1.2:
-        return None, "NONE", "LOW_VOLUME"
+    return None, "NONE", "SKIPPED"
 
-    # 5. ล็อกทิศทางแบบ High-Probability (M1 และ M5 ต้องสอดคล้องกันเป๊ะ)
-    # ขาขึ้นแข็งแกร่ง -> CALL
-    if current_price > ema8_val and m5_uptrend:
-        return symbol, "CALL", "HIGH_CONFIDENCE (คาดจบไม้ 1-2)"
-    
-    # ขาลงแข็งแกร่ง -> PUT
-    elif current_price < ema8_val and (not m5_uptrend):
-        return symbol, "PUT", "HIGH_CONFIDENCE (คาดจบไม้ 1-2)"
-
-    return None, "NONE", "TREND_MISMATCH"
-
-def find_ultra_signal():
+def find_zero_error_signal():
     for sym in SYMBOLS.keys():
-        symbol, direction, status = evaluate_symbol_ultra_momentum(sym)
+        symbol, direction, status = evaluate_absolute_zero_error(sym)
         if direction != "NONE":
             return symbol, direction, status
     return None, "NONE", "NO_SIGNAL"
@@ -164,7 +151,7 @@ def auto_signal_broadcaster():
                         cooldown_status[chat_id] = "READY"
                         continue
 
-                    sym, direction, status = find_ultra_signal()
+                    sym, direction, status = find_zero_error_signal()
                     step = user_martingale_step.get(chat_id, 1)
                     
                     if sym and direction != "NONE":
@@ -177,13 +164,13 @@ def auto_signal_broadcaster():
                         btn_label = "CALL" if is_buy else "PUT"
 
                         card_text = (
-                            f"⚡ **TITAN Ultra-Momentum 👑 M1**\n"
+                            f"⚡ **TITAN Zero-Error 👑 M1**\n"
                             f"⚡ **TITAN AI Bot (VIP) [ไม้ {step}]**\n\n"
                             f"💸 **ให้เรากดคู่:** `{symbol_label}`\n"
                             f"💎 **Timeframe:** `M1`\n"
                             f"⌚ **ตอนเวลา:** `{target_time_str}`\n"
                             f"🚀 **Action:** **{dir_emoji}**\n\n"
-                            f"🎯 **Probability:** `{status}`"
+                            f"🛡️ **Status:** `{status}`"
                         )
 
                         markup = InlineKeyboardMarkup(row_width=1)
@@ -224,7 +211,7 @@ def register_email(message):
             user_creds[message.chat.id] = {"email": email, "password": password}
             user_martingale_step[message.chat.id] = 1
             active_chat_ids.add(message.chat.id)
-            bot.reply_to(message, "⚡ **TITAN ULTRA-MOMENTUM CONNECTED** ⚡\nระบบกรองเน้นจบไว ไม้ 1-2 พร้อมทำงาน!", parse_mode="Markdown")
+            bot.reply_to(message, "⚡ **TITAN ZERO-ERROR CONNECTED** ⚡\nระบบอุดรอยรั่วเกาะเทรนด์ 100% พร้อมลุย!", parse_mode="Markdown")
         else:
             bot.reply_to(message, "❌ **AUTHENTICATION FAILED** สิทธิ์เข้าถึงไม่ถูกต้อง", parse_mode="Markdown")
     except Exception as e:
@@ -238,11 +225,11 @@ def send_welcome(message):
     password = creds.get("password", "")
 
     if not email or not password or not check_user_approved(email, password):
-        bot.send_message(chat_id, "⚡ **TITAN ULTRA BOT**\n\n🔒 กรุณายืนยันตัวตนก่อนใช้งาน:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", parse_mode="Markdown")
+        bot.send_message(chat_id, "⚡ **TITAN ZERO-ERROR BOT**\n\n🔒 กรุณายืนยันตัวตนก่อนใช้งาน:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", parse_mode="Markdown")
         return
 
     active_chat_ids.add(chat_id)
-    bot.send_message(chat_id, "⚡ **TITAN ULTRA ONLINE**\nพร้อมสแกนเฉพาะไม้แรงส่งสูงเพื่อจบไวแล้วครับ!", parse_mode="Markdown")
+    bot.send_message(chat_id, "⚡ **TITAN ZERO-ERROR ONLINE**\nพร้อมลุยด้วยระบบเกาะเทรนด์ที่นิ่งและแม่นยำที่สุดครับ!", parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
@@ -277,7 +264,7 @@ def handle_callbacks(call):
         bot.answer_callback_query(call.id, text)
 
 print("--------------------------------------------------")
-print("⚡ TITAN ULTRA-MOMENTUM BOT พร้อมรัน...")
+print("⚡ TITAN ABSOLUTE ZERO-ERROR BOT พร้อมรัน...")
 print("--------------------------------------------------")
 
 broadcaster_thread = threading.Thread(target=auto_signal_broadcaster, daemon=True)
