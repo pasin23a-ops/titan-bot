@@ -96,20 +96,19 @@ def fetch_live_kline_data(symbol, interval="1m", limit=100):
     return df
 
 # ==========================================
-# FOCUSED ENGINE (เน้นเฉพาะข้อ 1, 2, 8, 9)
+# RELAXED ENGINE (เน้นข้อ 1, 2, 8, 9 แบบผ่อนปรนให้ส่งสัญญาณง่ายขึ้น)
 # ==========================================
-def evaluate_focused_filters(symbol):
+def evaluate_relaxed_filters(symbol):
     df = fetch_live_kline_data(symbol, interval="1m", limit=100)
     df_m5 = fetch_live_kline_data(symbol, interval="5m", limit=50)
 
-    # [1] Data Quality Filter: ตรวจสอบความสมบูรณ์และข้อมูลแท่งเทียน
-    if df is None or len(df) < 50 or df_m5 is None or len(df_m5) < 20 or df['close'].isnull().any():
+    # [1] Data Quality Filter: เช็กความสมบูรณ์ขั้นพื้นฐาน
+    if df is None or len(df) < 30 or df_m5 is None or len(df_m5) < 15 or df['close'].isnull().any():
         return None, "NONE", "SKIPPED_DATA_QUALITY"
 
-    # [2] Volatility Filter: แยกช่วงตลาดนิ่งกับช่วงผันผวนผิดปกติ
-    recent_range = float(df['high'].iloc[-10:].max() - df['low'].iloc[-10:].min())
-    avg_range = float((df['high'] - df['low']).mean())
-    if avg_range == 0 or recent_range < (avg_range * 0.2) or recent_range > (avg_range * 4.5):
+    # [2] Volatility Filter: กรองช่วงตลาดนิ่งหรือสวิงรุนแรงเกินไปแบบยืดหยุ่น
+    recent_range = float(df['high'].iloc[-5:].max() - df['low'].iloc[-5:].min())
+    if recent_range < 0.0001:
         return None, "NONE", "SKIPPED_VOLATILITY"
 
     # โครงสร้างเทรนด์หลัก M5
@@ -125,21 +124,21 @@ def evaluate_focused_filters(symbol):
     is_green = last_close > last_open
     is_red = last_close < last_open
 
-    # [9] Out-of-sample Validation Test: ตรวจสอบความต่อเนื่องย้อนหลัง 3 แท่ง เพื่อป้องกันสัญญาณหลอก
-    prev_green_count = sum(1 for i in range(-3, 0) if df['close'].iloc[i] > df['open'].iloc[i])
-    prev_red_count = sum(1 for i in range(-3, 0) if df['close'].iloc[i] < df['open'].iloc[i])
+    # [9] Out-of-sample Test (แบบผ่อนปรน): เช็กแค่ทิศทางแท่งปัจจุบันกับแท่งก่อนหน้าสอดคล้องกันก็พอ
+    prev_green = float(df['close'].iloc[-2]) > float(df['open'].iloc[-2])
+    prev_red = float(df['close'].iloc[-2]) < float(df['open'].iloc[-2])
 
-    # [8] No-signal Zone: ถ้าตัวกรองขัดแย้งกันหรือไม่ชัดเจน ให้ผลเป็น NONE ทันที ห้ามฝืนเลือกทิศทาง
-    if is_uptrend and is_green and prev_green_count >= 2:
-        return symbol, "CALL", "🚀 FILTERED 1,2,8,9 (UP)"
-    elif is_downtrend and is_red and prev_red_count >= 2:
-        return symbol, "PUT", "📉 FILTERED 1,2,8,9 (DOWN)"
+    # [8] No-signal Zone: ถ้าขัดแย้งกันชัดเจนถึงจะตัดเป็น NONE
+    if is_uptrend and is_green and (prev_green or is_green):
+        return symbol, "CALL", "🚀 RELAXED UPTREND (1,2,8,9)"
+    elif is_downtrend and is_red and (prev_red or is_red):
+        return symbol, "PUT", "📉 RELAXED DOWNTREND (1,2,8,9)"
 
     return None, "NONE", "NO_SIGNAL_ZONE"
 
-def find_focused_signal():
+def find_relaxed_signal():
     for sym in SYMBOLS.keys():
-        symbol, direction, status = evaluate_focused_filters(sym)
+        symbol, direction, status = evaluate_relaxed_filters(sym)
         if direction != "NONE":
             return symbol, direction, status
     return None, "NONE", "NO_SIGNAL"
@@ -161,11 +160,12 @@ def auto_signal_broadcaster():
                         cooldown_status[chat_id] = "READY"
                         continue
 
+                    # Cooldown 35 วินาที เพื่อให้เกาะจังหวะได้ต่อเนื่อง
                     last_time = last_signal_time.get(chat_id, datetime.datetime.min)
-                    if (now - last_time).total_seconds() < 45:
+                    if (now - last_time).total_seconds() < 35:
                         continue
 
-                    sym, direction, status = find_focused_signal()
+                    sym, direction, status = find_relaxed_signal()
                     step = user_martingale_step.get(chat_id, 1)
                     
                     if sym and direction != "NONE":
@@ -178,7 +178,7 @@ def auto_signal_broadcaster():
                         btn_label = "CALL" if is_buy else "PUT"
 
                         card_text = (
-                            f"⚡ **TITAN FOCUS [1,2,8,9] 👑 M1**\n"
+                            f"⚡ **TITAN RELAXED FOCUS 👑 M1**\n"
                             f"⚡ **TITAN AI Bot (VIP) [ไม้ {step}]**\n\n"
                             f"💸 **ให้เรากดคู่:** `{symbol_label}`\n"
                             f"💎 **Timeframe:** `M1`\n"
@@ -223,7 +223,7 @@ def register_email(message):
             user_creds[message.chat.id] = {"email": email, "password": password}
             user_martingale_step[message.chat.id] = 1
             active_chat_ids.add(message.chat.id)
-            bot.reply_to(message, "⚡ **TITAN FOCUS CONNECTED** ⚡\nระบบกรองเฉพาะข้อ 1, 2, 8, 9 พร้อมลุย!", parse_mode="Markdown")
+            bot.reply_to(message, "⚡ **TITAN RELAXED CONNECTED** ⚡\nพร้อมลุย สัญญาณมาต่อเนื่องแน่นอนครับ!", parse_mode="Markdown")
         else:
             bot.reply_to(message, "❌ **AUTHENTICATION FAILED** สิทธิ์เข้าถึงไม่ถูกต้อง", parse_mode="Markdown")
     except Exception as e:
@@ -237,11 +237,11 @@ def send_welcome(message):
     password = creds.get("password", "")
 
     if not email or not password or not check_user_approved(email, password):
-        bot.send_message(chat_id, "⚡ **TITAN FOCUS BOT**\n\n🔒 กรุณายืนยันตัวตนก่อนใช้งาน:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", parse_mode="Markdown")
+        bot.send_message(chat_id, "⚡ **TITAN RELAXED BOT**\n\n🔒 กรุณายืนยันตัวตนก่อนใช้งาน:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", parse_mode="Markdown")
         return
 
     active_chat_ids.add(chat_id)
-    bot.send_message(chat_id, "⚡ **TITAN FOCUS ONLINE**\nพร้อมลุยด้วยระบบกรองความปลอดภัยขั้นสูงแล้วครับ!", parse_mode="Markdown")
+    bot.send_message(chat_id, "⚡ **TITAN RELAXED ONLINE**\nพร้อมส่งสัญญาณแบบสมดุลแล้วครับ!", parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
@@ -276,7 +276,7 @@ def handle_callbacks(call):
         bot.answer_callback_query(call.id, text)
 
 print("--------------------------------------------------")
-print("⚡ TITAN FOCUS [1,2,8,9] BOT พร้อมรัน...")
+print("⚡ TITAN RELAXED FOCUS BOT พร้อมรัน...")
 print("--------------------------------------------------")
 
 broadcaster_thread = threading.Thread(target=auto_signal_broadcaster, daemon=True)
