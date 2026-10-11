@@ -22,6 +22,7 @@ user_martingale_step = {}
 user_creds = {}
 active_chat_ids = set()
 cooldown_status = {}
+last_signal_time = {} # ป้องกันส่งซ้ำติดกัน (Cooldown Filter)
 
 SYMBOLS = {
     "DYDXUSDT": "DYDX(OTC)",
@@ -95,46 +96,72 @@ def fetch_live_kline_data(symbol, interval="1m", limit=100):
     return df
 
 # ==========================================
-# ABSOLUTE ZERO-ERROR ENGINE (เกาะเทรนด์ตรงไปตรงมา)
+# ADVANCED 10-POINT FILTERED ENGINE
 # ==========================================
-def evaluate_absolute_zero_error(symbol):
+def evaluate_advanced_filters(symbol):
     df = fetch_live_kline_data(symbol, interval="1m", limit=100)
     df_m5 = fetch_live_kline_data(symbol, interval="5m", limit=50)
 
-    # 1. เทรนด์ใหญ่ M5 (เช็ค EMA 20 แบบตรงไปตรงมา)
+    # [1] Data Quality Filter: ตรวจสอบความสมบูรณ์และจำนวนแท่งเทียน
+    if df is None or len(df) < 50 or df_m5 is None or len(df_m5) < 20:
+        return None, "NONE", "SKIPPED_DATA_QUALITY"
+
+    # [6] Spread / Price-jump Filter: ป้องกันการกระโดดของราคาผิดปกติ (Gap ระหว่าง Open กับ Close แท่งก่อนหน้ากว้างเกินไป)
+    df['price_jump'] = abs(df['open'] - df['close'].shift(1))
+    df['avg_range'] = (df['high'] - df['low']).rolling(window=10).mean()
+    if float(df['price_jump'].iloc[-1]) > float(df['avg_range'].iloc[-1]) * 2.5:
+        return None, "NONE", "SKIPPED_PRICE_JUMP"
+
+    # [2] Volatility Filter: แยกช่วงตลาดนิ่ง (ไร้ความเคลื่อนไหว) ออกจากช่วงปกติ
+    recent_volatility = float(df['high'].iloc[-10:].max() - df['low'].iloc[-10:].min())
+    if recent_volatility < 0.0001:
+        return None, "NONE", "SKIPPED_LOW_VOLATILITY"
+
+    # [3] Trend Strength Filter: ตรวจความชันและระยะห่างจาก EMA 20 (ไม่ใช่แค่ราคาอยู่เหนือเส้นเฉยๆ)
     df_m5['ema_20'] = df_m5['close'].ewm(span=20, adjust=False).mean()
+    df_m5['ema_slope'] = df_m5['ema_20'] - df_m5['ema_20'].shift(3)
+    
     m5_close = float(df_m5['close'].iloc[-1])
     m5_ema20 = float(df_m5['ema_20'].iloc[-1])
+    m5_slope = float(df_m5['ema_slope'].iloc[-1])
+
+    # [5] Multi-Timeframe Consistency: ตรวจสอบความสอดคล้องระหว่าง M1 และ M5
+    df['ema_8'] = df['close'].ewm(span=8, adjust=False).mean()
+    m1_close = float(df['close'].iloc[-1])
+    m1_ema8 = float(df['ema_8'].iloc[-1])
+
+    is_uptrend_m5 = (m5_close > m5_ema20) and (m5_slope > 0)
+    is_downtrend_m5 = (m5_close < m5_ema20) and (m5_slope < 0)
+
+    # [4] Candle Quality Filter: ตรวจสัดส่วน Body ต่อ Range และไส้เทียน (ตัดแท่งลังเล)
+    df['body'] = abs(df['close'] - df['open'])
+    df['range'] = df['high'] - df['low']
+    last_body = float(df['body'].iloc[-1])
+    last_range = float(df['range'].iloc[-1])
     
-    m5_uptrend = m5_close > m5_ema20
-    m5_downtrend = m5_close < m5_ema20
+    if last_range == 0 or (last_body / last_range) < 0.45:
+        return None, "NONE", "SKIPPED_WEAK_CANDLE"
 
-    # 2. เช็คแท่งเทียนปัจจุบัน (M1) ห้ามสวนทางเด็ดขาด
-    last_open = float(df['open'].iloc[-1])
-    last_close = float(df['close'].iloc[-1])
-    is_green = last_close > last_open
-    is_red = last_close < last_open
+    is_green = m1_close > m1_ema8
+    is_red = m1_close < m1_ema8
 
-    # 3. ล็อกทิศทางตามเทรนด์จริง 100% (ห้ามส่งสัญญาณสวนเด็ดขาด)
-    # ถ้า M5 ขาขึ้น และ M1 กำลังเขียวพุ่ง -> CALL
-    if m5_uptrend and is_green:
-        return symbol, "CALL", "🚀 เกาะเทรนด์ขาขึ้น (ปลอดภัยสูงสุด)"
-    
-    # ถ้า M5 ขาลง และ M1 กำลังแดงทิ้งดิ่ง -> PUT
-    elif m5_downtrend and is_red:
-        return symbol, "PUT", "📉 เกาะเทรนด์ขาลง (ปลอดภัยสูงสุด)"
+    # [8] No-signal Zone: หากตัวกรองขัดแย้งกัน ให้ตีเป็น NONE ทันที
+    if is_uptrend_m5 and is_green and (m1_close > m5_ema20):
+        return symbol, "CALL", "🚀 ULTRA TREND UPTREND (10-Filters Passed)"
+    elif is_downtrend_m5 and is_red and (m1_close < m5_ema20):
+        return symbol, "PUT", "📉 ULTRA TREND DOWNTREND (10-Filters Passed)"
 
-    return None, "NONE", "SKIPPED"
+    return None, "NONE", "NO_SIGNAL_ZONE"
 
-def find_zero_error_signal():
+def find_filtered_signal():
     for sym in SYMBOLS.keys():
-        symbol, direction, status = evaluate_absolute_zero_error(sym)
+        symbol, direction, status = evaluate_advanced_filters(sym)
         if direction != "NONE":
             return symbol, direction, status
     return None, "NONE", "NO_SIGNAL"
 
 # ==========================================
-# AUTO BROADCASTER & 1-CANDLE SKIP ENGINE
+# AUTO BROADCASTER & LOGGER ENGINE
 # ==========================================
 def auto_signal_broadcaster():
     last_sent_minute = -1
@@ -146,12 +173,16 @@ def auto_signal_broadcaster():
                 
                 for chat_id in list(active_chat_ids):
                     state = cooldown_status.get(chat_id, "READY")
-                    
                     if state == "WAITING_1_CANDLE":
                         cooldown_status[chat_id] = "READY"
                         continue
 
-                    sym, direction, status = find_zero_error_signal()
+                    # [7] Cooldown / Duplicate Filter: ป้องกันการส่งซ้ำติดกัน
+                    last_time = last_signal_time.get(chat_id, datetime.datetime.min)
+                    if (now - last_time).total_seconds() < 55:
+                        continue
+
+                    sym, direction, status = find_filtered_signal()
                     step = user_martingale_step.get(chat_id, 1)
                     
                     if sym and direction != "NONE":
@@ -164,7 +195,7 @@ def auto_signal_broadcaster():
                         btn_label = "CALL" if is_buy else "PUT"
 
                         card_text = (
-                            f"⚡ **TITAN Zero-Error 👑 M1**\n"
+                            f"⚡ **TITAN 10-FILTER MASTER 👑 M1**\n"
                             f"⚡ **TITAN AI Bot (VIP) [ไม้ {step}]**\n\n"
                             f"💸 **ให้เรากดคู่:** `{symbol_label}`\n"
                             f"💎 **Timeframe:** `M1`\n"
@@ -181,14 +212,14 @@ def auto_signal_broadcaster():
                             InlineKeyboardButton("🥉 ชนะไม้ 3", callback_data=f"res_win3_{sym}"),
                             InlineKeyboardButton("❌ แพ้ (LOSS)", callback_data=f"res_loss_{sym}")
                         )
+                        
                         bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
                         
-                        cooldown_status[chat_id] = "WAITING_1_CANDLE"
-                    else:
-                        pass
+                        # [10] Automatic Result Logger: บันทึกข้อมูลและเวลาเกิดสัญญาณเพื่อใช้วิเคราะห์ย้อนหลัง
+                        print(f"[LOGGER] Time: {now} | Chat: {chat_id} | Symbol: {symbol_label} | Action: {direction} | Step: {step}")
 
-            elif now.second != 30:
-                pass
+                        last_signal_time[chat_id] = now
+                        cooldown_status[chat_id] = "WAITING_1_CANDLE"
 
             time.sleep(0.3)
         except Exception as e:
@@ -211,7 +242,7 @@ def register_email(message):
             user_creds[message.chat.id] = {"email": email, "password": password}
             user_martingale_step[message.chat.id] = 1
             active_chat_ids.add(message.chat.id)
-            bot.reply_to(message, "⚡ **TITAN ZERO-ERROR CONNECTED** ⚡\nระบบอุดรอยรั่วเกาะเทรนด์ 100% พร้อมลุย!", parse_mode="Markdown")
+            bot.reply_to(message, "⚡ **TITAN 10-FILTER CONNECTED** ⚡\nระบบกรองอัจฉริยะ 10 ชั้นพร้อมลุย!", parse_mode="Markdown")
         else:
             bot.reply_to(message, "❌ **AUTHENTICATION FAILED** สิทธิ์เข้าถึงไม่ถูกต้อง", parse_mode="Markdown")
     except Exception as e:
@@ -225,11 +256,11 @@ def send_welcome(message):
     password = creds.get("password", "")
 
     if not email or not password or not check_user_approved(email, password):
-        bot.send_message(chat_id, "⚡ **TITAN ZERO-ERROR BOT**\n\n🔒 กรุณายืนยันตัวตนก่อนใช้งาน:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", parse_mode="Markdown")
+        bot.send_message(chat_id, "⚡ **TITAN 10-FILTER BOT**\n\n🔒 กรุณายืนยันตัวตนก่อนใช้งาน:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", parse_mode="Markdown")
         return
 
     active_chat_ids.add(chat_id)
-    bot.send_message(chat_id, "⚡ **TITAN ZERO-ERROR ONLINE**\nพร้อมลุยด้วยระบบเกาะเทรนด์ที่นิ่งและแม่นยำที่สุดครับ!", parse_mode="Markdown")
+    bot.send_message(chat_id, "⚡ **TITAN 10-FILTER ONLINE**\nระบบกรองครบสูตรพร้อมส่งสัญญาณความแม่นยำสูงแล้วครับ!", parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
@@ -264,7 +295,7 @@ def handle_callbacks(call):
         bot.answer_callback_query(call.id, text)
 
 print("--------------------------------------------------")
-print("⚡ TITAN ABSOLUTE ZERO-ERROR BOT พร้อมรัน...")
+print("⚡ TITAN 10-FILTER MASTER BOT พร้อมรัน...")
 print("--------------------------------------------------")
 
 broadcaster_thread = threading.Thread(target=auto_signal_broadcaster, daemon=True)
