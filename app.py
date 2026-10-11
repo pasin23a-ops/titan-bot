@@ -21,6 +21,7 @@ symbol_stats = {}
 user_martingale_step = {}
 user_creds = {}
 active_chat_ids = set()
+cooldown_status = {} # เก็บสถานะคูลดาวน์เว้น 1 แท่งเทียน
 
 SYMBOLS = {
     "DYDXUSDT": "DYDX(OTC)",
@@ -107,13 +108,11 @@ def deep_market_analysis(symbol):
     df_m1 = fetch_live_kline_data(symbol, interval="1m", limit=100)
     df_m5 = fetch_live_kline_data(symbol, interval="5m", limit=50)
 
-    # 1. Multi-Timeframe Trend Confirmation (M5 EMA20)
     df_m5['ema_20'] = df_m5['close'].ewm(span=20, adjust=False).mean()
     m5_close = float(df_m5['close'].iloc[-1])
     m5_ema20 = float(df_m5['ema_20'].iloc[-1])
     m5_is_uptrend = m5_close > m5_ema20
 
-    # 2. Strict Support / Resistance Barriers & Fakeout Guard
     recent_highs = df_m1['high'].tail(30).max()
     recent_lows = df_m1['low'].tail(30).min()
     current_price = float(df_m1['close'].iloc[-1])
@@ -129,19 +128,16 @@ def deep_market_analysis(symbol):
     if last_range > 0 and (last_body / last_range) < 0.30:
         return "NONE", 0.0
 
-    # 3. Precision EMA Confluence (M1 EMA5, EMA20, EMA50)
     df_m1['ema_5'] = df_m1['close'].ewm(span=5, adjust=False).mean()
     df_m1['ema_20'] = df_m1['close'].ewm(span=20, adjust=False).mean()
     df_m1['ema_50'] = df_m1['close'].ewm(span=50, adjust=False).mean()
     
-    # 4. MACD Divergence & Momentum
     m_fast = df_m1['close'].ewm(span=12, adjust=False).mean()
     m_slow = df_m1['close'].ewm(span=26, adjust=False).mean()
     df_m1['macd_line'] = m_fast - m_slow
     df_m1['macd_signal'] = df_m1['macd_line'].ewm(span=9, adjust=False).mean()
     df_m1['macd_hist'] = df_m1['macd_line'] - df_m1['macd_signal']
     
-    # 5. RSI Dynamic Level Filter
     df_m1['rsi'] = calculate_rsi(df_m1['close'], 14)
 
     ema5 = float(df_m1['ema_5'].iloc[-1])
@@ -151,7 +147,6 @@ def deep_market_analysis(symbol):
     last_rsi = float(df_m1['rsi'].iloc[-1])
     last_open = float(df_m1['open'].iloc[-1])
 
-    # เกณฑ์ความแม่นยำระดับเข้มงวด 95% ขึ้นไป
     is_call = (ema5 > ema20 > ema50) and (current_price > last_open) and (last_macd > 0) and (53 < last_rsi < 67) and m5_is_uptrend
     is_put = (ema5 < ema20 < ema50) and (current_price < last_open) and (last_macd < 0) and (33 < last_rsi < 47) and (not m5_is_uptrend)
 
@@ -179,7 +174,7 @@ def find_best_single_signal():
     return best_symbol, best_direction, best_score
 
 # ==========================================
-# AUTO BROADCASTER & DEEP COOLDOWN ENGINE
+# AUTO BROADCASTER & 1-CANDLE SKIP ENGINE
 # ==========================================
 def auto_signal_broadcaster():
     last_sent_minute = -1
@@ -189,10 +184,16 @@ def auto_signal_broadcaster():
             if now.second == 30 and now.minute != last_sent_minute:
                 last_sent_minute = now.minute
                 
-                # สแกนตลาดความแม่นยำ 95%+
-                sym, direction, score = find_best_single_signal()
-                
                 for chat_id in list(active_chat_ids):
+                    # ตรวจสอบสถานะคูลดาวน์เว้น 1 แท่งเทียน
+                    state = cooldown_status.get(chat_id, "READY")
+                    
+                    if state == "WAITING_1_CANDLE":
+                        # ถ้าอยู่ในสถานะรอเว้น 1 แท่ง ให้เปลี่ยนสถานะกลับเป็น READY แล้วข้ามรอบนี้ไปเงียบๆ
+                        cooldown_status[chat_id] = "READY"
+                        continue
+
+                    sym, direction, score = find_best_single_signal()
                     step = user_martingale_step.get(chat_id, 1)
                     
                     if sym and direction != "NONE":
@@ -207,9 +208,9 @@ def auto_signal_broadcaster():
                         card_text = (
                             f"⚡ **TITAN Signal Official 👑 M1**\n"
                             f"⚡ **TITAN AI Bot (VIP) [ไม้ {step}]**\n\n"
-                            f"💸 **Asset:** `{symbol_label}`\n"
+                            f"💸 **ให้เรากดคู่:** `{symbol_label}`\n"
                             f"💎 **Timeframe:** `M1`\n"
-                            f"⌚ **Target Time:** `{target_time_str}`\n"
+                            f"⌚ **ตอนเวลา:** `{target_time_str}`\n"
                             f"🚀 **Action:** **{dir_emoji}**\n\n"
                             f"📊 **Accuracy:** `{score:.1f}%`"
                         )
@@ -223,21 +224,11 @@ def auto_signal_broadcaster():
                             InlineKeyboardButton("❌ แพ้ (LOSS)", callback_data=f"res_loss_{sym}")
                         )
                         bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
-                    else:
-                        # กรณีไม่มีคู่ผ่านเกณฑ์ 95%: แจ้งคูลดาวน์ 1 แท่งเทียน + กำลังคำนวณแท่งถัดไปอย่างละเอียด
-                        next_candle_time = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M')
                         
-                        cooldown_text = (
-                            f"⏳ **TITAN Market Cooldown (1 Candle)**\n"
-                            f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-                            f"🛡️ ไม่พบคู่เงินที่ผ่านเกณฑ์ความแม่นยำ `95%`\n"
-                            f"🧠 **กำลังคำนวณกราฟแท่งถัดไปอย่างละเอียดยิบ...**\n"
-                            f"• EMA Confluence Scan\n"
-                            f"• MACD & RSI Divergence Filter\n"
-                            f"• S/R Barrier & Wick Protection\n\n"
-                            f"⏱️ **พร้อมปล่อยออเดอร์ถัดไปเวลา: `{next_candle_time}`**"
-                        )
-                        bot.send_message(chat_id, cooldown_text, parse_mode="Markdown")
+                        # ส่งสัญญาณเสร็จปุ๊ป สั่งเข้าสู่โหมดเว้น 1 แท่งเทียนในรอบถัดไปทันที
+                        cooldown_status[chat_id] = "WAITING_1_CANDLE"
+                    else:
+                        pass
 
             elif now.second != 30:
                 pass
@@ -263,7 +254,7 @@ def register_email(message):
             user_creds[message.chat.id] = {"email": email, "password": password}
             user_martingale_step[message.chat.id] = 1
             active_chat_ids.add(message.chat.id)
-            bot.reply_to(message, "⚡ **TITAN 95% VIP CONNECTED SUCCESS** ⚡\nระบบวิเคราะห์เชิงลึกอัตโนมัติพร้อมคูลดาวน์คำนวณแท่งถัดไปทำงานเรียบร้อย!", parse_mode="Markdown")
+            bot.reply_to(message, "⚡ **TITAN 95% VIP CONNECTED SUCCESS** ⚡\nระบบส่งสัญญาณสลับเว้น 1 แท่งเทียนทำงานสมบูรณ์!", parse_mode="Markdown")
         else:
             bot.reply_to(message, "❌ **AUTHENTICATION FAILED** สิทธิ์เข้าถึงไม่ถูกต้อง", parse_mode="Markdown")
     except Exception as e:
@@ -281,7 +272,7 @@ def send_welcome(message):
         return
 
     active_chat_ids.add(chat_id)
-    bot.send_message(chat_id, "⚡ **TITAN 95% VIP ONLINE**\nระบบพร้อมสแกนกราฟความแม่นยำสูง 95%+ อัตโนมัติเรียบร้อยครับ!", parse_mode="Markdown")
+    bot.send_message(chat_id, "⚡ **TITAN 95% VIP ONLINE**\nพร้อมส่งสัญญาณและเว้นช่วง 1 แท่งเทียนอัตโนมัติเรียบร้อยครับ!", parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
@@ -316,7 +307,7 @@ def handle_callbacks(call):
         bot.answer_callback_query(call.id, text)
 
 print("--------------------------------------------------")
-print("⚡ TITAN 95% AUTO COOLDOWN SCANNER พร้อมรัน...")
+print("⚡ TITAN 95% 1-CANDLE SKIP BOT พร้อมรัน...")
 print("--------------------------------------------------")
 
 broadcaster_thread = threading.Thread(target=auto_signal_broadcaster, daemon=True)
