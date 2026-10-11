@@ -16,7 +16,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 active_chat_ids = set()
 user_martingale_step = {}
 user_stats = {}
-cooldown_status = {}  # ระบบจัดการ Cooldown
+cooldown_status = {}
 last_signal_time = {}
 
 SYMBOLS = {
@@ -62,7 +62,6 @@ def fetch_live_kline_data(symbol, interval="1m", limit=100):
     except Exception:
         pass
     
-    # Fallback Data Generator กรณี API มีปัญหา
     size = limit
     df = pd.DataFrame()
     np.random.seed(int(time.time() * 1000) % 1000000 + sum(ord(c) for c in symbol))
@@ -75,17 +74,16 @@ def fetch_live_kline_data(symbol, interval="1m", limit=100):
     return df
 
 # ==========================================
-# Advanced Multi-Timeframe Trend Engine
+# Advanced Scoring & Multi-Timeframe Engine
 # ==========================================
-def analyze_deep_trend(symbol):
-    # ดึงข้อมูล M1 และ M5 คำนวณแบบละเอียด
+def analyze_and_score(symbol):
     df_m1 = fetch_live_kline_data(symbol, interval="1m", limit=60)
     df_m5 = fetch_live_kline_data(symbol, interval="5m", limit=30)
 
     if df_m1 is None or len(df_m1) < 20 or df_m5 is None or len(df_m5) < 10:
-        return None, "NONE", "SKIPPED_DATA_INSUFFICIENT"
+        return "NONE", 0, "DATA_INSUFFICIENT"
 
-    # คำนวณ Moving Averages คำนวณเทรนด์หลัก
+    # คำนวณเทรนด์ M5
     df_m5['ema_20'] = df_m5['close'].ewm(span=20, adjust=False).mean()
     m5_close = float(df_m5['close'].iloc[-1])
     m5_ema20 = float(df_m5['ema_20'].iloc[-1])
@@ -93,7 +91,7 @@ def analyze_deep_trend(symbol):
     is_m5_uptrend = m5_close > m5_ema20
     is_m5_downtrend = m5_close < m5_ema20
 
-    # คำนวณ Indicators ใน M1
+    # คำนวณ M1
     df_m1['ema_50'] = df_m1['close'].ewm(span=50, adjust=False).mean()
     m1_close = float(df_m1['close'].iloc[-1])
     m1_open = float(df_m1['open'].iloc[-1])
@@ -102,35 +100,46 @@ def analyze_deep_trend(symbol):
     is_m1_green = m1_close > m1_open
     is_m1_red = m1_close < m1_open
 
-    # กรองความผันผวน (Volatilty Check - กันกราฟโดจิ/กราฟนิ่ง)
     body_size = abs(m1_close - m1_open)
     if body_size < 0.0001:
-        return None, "NONE", "NOISY_MARKET"
+        return "NONE", 0, "NOISY"
 
-    # กรองเฉพาะจุดที่ M5 และ M1 เป็นเทรนด์เดียวกัน 100% (Strict Trend Follow)
+    # คำนวณ Score ความห่างของราคาจากเส้น EMA (ยิ่งห่างและแท่งเทียนชัด คะแนนความมั่นใจยิ่งสูง)
+    score = abs(m1_close - m1_ema50) * 100 + body_size * 10
+
     if is_m5_uptrend and m1_close > m1_ema50 and is_m1_green:
-        return symbol, "CALL", "🔥 STRONG UPTREND (Trend-Follow)"
+        return "CALL", score, "🔥 TOP UPTREND CONFIRMED"
     elif is_m5_downtrend and m1_close < m1_ema50 and is_m1_red:
-        return symbol, "PUT", "📉 STRONG DOWNTREND (Trend-Follow)"
+        return "PUT", score, "📉 TOP DOWNTREND CONFIRMED"
 
-    return None, "NONE", "NO_CLEAR_TREND"
+    return "NONE", 0, "NO_TREND"
 
-def find_robust_signal():
+def find_most_confident_signal():
+    best_sym = None
+    best_direction = "NONE"
+    best_status = "NO_SIGNAL"
+    highest_score = -1
+
+    # สแกนทุกคู่ในตลาด แล้วหาคู่ที่ Score สูงสุด (มั่นใจที่สุด)
     for sym in SYMBOLS.keys():
-        symbol, direction, status = analyze_deep_trend(sym)
-        if direction != "NONE":
-            return symbol, SYMBOLS.get(symbol, symbol), direction, status
+        direction, score, status = analyze_and_score(sym)
+        if direction != "NONE" and score > highest_score:
+            highest_score = score
+            best_sym = sym
+            best_direction = direction
+            best_status = f"{status} (Score: {int(score)})"
+
+    if best_sym:
+        return best_sym, SYMBOLS.get(best_sym, best_sym), best_direction, best_status
     return None, None, "NONE", "NO_SIGNAL"
 
 def send_signal_card(chat_id):
-    # เช็ก Cooldown
     current_state = cooldown_status.get(chat_id, "READY")
     if current_state == "WAITING_COOLDOWN":
-        # อยู่ช่วง คูลดาวน์ -> เคลียร์เป็น READY สำหรับแท่งถัดไป
         cooldown_status[chat_id] = "READY"
         return
 
-    sym, label, direction, status = find_robust_signal()
+    sym, label, direction, status = find_most_confident_signal()
     step = user_martingale_step.get(chat_id, 1)
 
     if sym and direction != "NONE":
@@ -139,18 +148,18 @@ def send_signal_card(chat_id):
         target_time_str = target_time.strftime('%H:%M')
 
         is_buy = (direction == "CALL")
-        dir_emoji = "⬆️ BUY 🟢 (ตามเทรนด์)" if is_buy else "⬇️ SELL 🔴 (ตามเทรนด์)"
+        dir_emoji = "⬆️ BUY 🟢 (มั่นใจสูงสุด)" if is_buy else "⬇️ SELL 🔴 (มั่นใจสูงสุด)"
         btn_label = "CALL" if is_buy else "PUT"
 
         card_text = (
-            f"⚡ **TITAN TREND-MASTER 👑 M1**\n"
+            f"⚡ **TITAN TOP-PICK MASTER 👑 M1**\n"
             f"⚡ **[ไม้ {step}]**\n\n"
-            f"💸 **สินทรัพย์:** `{label}`\n"
-            f"💎 **Timeframe:** `M1`\n"
+            f"💎 **คัดคู่ที่ดีที่สุด:** `{label}`\n"
+            f"📈 **Timeframe:** `M1`\n"
             f"⌚ **กดออเดอร์เวลา:** `{target_time_str}`\n"
             f"🚀 **ทิศทาง:** **{dir_emoji}**\n\n"
-            f"🛡️ **การกรอง:** `{status}`\n"
-            f"⏱️ **Status:** `คูลดาวน์เปิดทำงานหลังส่งสัญญาณ`"
+            f"🛡️ **สถานะ:** `{status}`\n"
+            f"⏱️ **Cooldown:** `เปิดใช้งานรอบ่อทพัก 1 แท่ง`"
         )
 
         markup = InlineKeyboardMarkup(row_width=1)
@@ -163,8 +172,6 @@ def send_signal_card(chat_id):
         )
         
         bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
-        
-        # ตั้งค่า Cooldown ทันที
         cooldown_status[chat_id] = "WAITING_COOLDOWN"
         last_signal_time[chat_id] = now
 
@@ -173,13 +180,10 @@ def auto_signal_broadcaster():
     while True:
         try:
             now = get_thai_time()
-            # ยิงสัญญาณที่วินาทีที่ 30
             if now.second == 30 and now.minute != last_sent_minute:
                 last_sent_minute = now.minute
                 for chat_id in list(active_chat_ids):
                     send_signal_card(chat_id)
-            
-            # ระหว่าง Cooldown / ช่วงรอวินาทีที่ 30: รันเธรดคำนวณเบื้องหลังเงียบๆ
             time.sleep(0.5)
         except Exception as e:
             print(f"⚠️ Broadcast Error: {e}")
@@ -191,20 +195,13 @@ def send_welcome(message):
     active_chat_ids.add(chat_id)
     user_martingale_step[chat_id] = 1
     cooldown_status[chat_id] = "READY"
-    
-    bot.send_message(
-        chat_id, 
-        "⚡ **TITAN ADVANCED TREND BOT ONLINE**\n"
-        "เชื่อมต่อสำเร็จ! ระบบสแกนตามเทรนด์ + คูลดาวน์อุดทุกล่องโหว่พร้อมทำงานแล้วครับ\n"
-        "กด /scan เพื่อสแกนสดได้ทันที!", 
-        parse_mode="Markdown"
-    )
+    bot.send_message(chat_id, "⚡ **TITAN TOP-PICK BOT ONLINE**\nระบบสแกนหากราฟที่มั่นใจที่สุดพร้อมทำงานแล้ว พิมพ์ `/scan` เพื่อทดสอบได้เลย!", parse_mode="Markdown")
 
 @bot.message_handler(commands=['scan'])
 def manual_scan(message):
     chat_id = message.chat.id
     active_chat_ids.add(chat_id)
-    bot.reply_to(message, "🔎 กำลังคำนวณกราฟแบบละเอียดตามเทรนด์...")
+    bot.reply_to(message, "🔎 กำลังสแกนทุกคู่เงินเพื่อหาตัวที่มั่นใจที่สุด...")
     send_signal_card(chat_id)
 
 @bot.callback_query_handler(func=lambda call: True)
@@ -235,12 +232,12 @@ def handle_callbacks(call):
                 user_martingale_step[chat_id] = 1
                 text = "❌ Loss Reset: กลับสู่ไม้ที่ 1"
         else:
-            text = "บันทึกสถิติเรียบร้อย"
+            text = "บันทึกเรียบร้อย"
             
         bot.answer_callback_query(call.id, text)
 
 print("--------------------------------------------------")
-print("⚡ TITAN TREND ENGINE พร้อมรันบน Railway...")
+print("⚡ TITAN TOP-PICK ENGINE พร้อมรันบน Railway...")
 print("--------------------------------------------------")
 
 broadcaster_thread = threading.Thread(target=auto_signal_broadcaster, daemon=True)
