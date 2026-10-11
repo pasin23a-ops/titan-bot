@@ -75,9 +75,6 @@ def fetch_live_kline_data(symbol, interval="1m", limit=100):
     df['volume'] = np.random.rand(size) * 1000
     return df
 
-# ==========================================
-# FAST-START FILTER ENGINE
-# ==========================================
 def evaluate_fast_filters(symbol):
     df = fetch_live_kline_data(symbol, interval="1m", limit=100)
     df_m5 = fetch_live_kline_data(symbol, interval="5m", limit=50)
@@ -111,9 +108,6 @@ def find_fast_signal():
             return symbol, direction, status
     return None, "NONE", "NO_SIGNAL"
 
-# ==========================================
-# AUTO BROADCASTER ENGINE
-# ==========================================
 def auto_signal_broadcaster():
     last_sent_minute = -1
     while True:
@@ -145,8 +139,8 @@ def auto_signal_broadcaster():
                         btn_label = "CALL" if is_buy else "PUT"
 
                         card_text = (
-                            f"⚡ **TITAN FAST-START 👑 M1**\n"
-                            f"⚡ **TITAN AI Bot (VIP) [ไม้ {step}]**\n\n"
+                            f"⚡ **TITAN CLEAN BOT 👑 M1**\n"
+                            f"⚡ **[ไม้ {step}]**\n\n"
                             f"💸 **ให้เรากดคู่:** `{symbol_label}`\n"
                             f"💎 **Timeframe:** `M1`\n"
                             f"⌚ **ตอนเวลา:** `{target_time_str}`\n"
@@ -174,15 +168,12 @@ def auto_signal_broadcaster():
             print(f"⚠️ Broadcast Error: {e}")
             time.sleep(1)
 
-# ==========================================
-# TELEGRAM BOT HANDLERS
-# ==========================================
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     chat_id = message.chat.id
     active_chat_ids.add(chat_id)
     user_martingale_step[chat_id] = 1
-    bot.send_message(chat_id, "⚡ **TITAN FAST-START ONLINE**\nเชื่อมต่อสำเร็จ! บอทพร้อมสแกนและส่งสัญญาณแล้วครับ!", parse_mode="Markdown")
+    bot.send_message(chat_id, "⚡ **TITAN BOT ONLINE**\nเชื่อมต่อสำเร็จ พร้อมรับสัญญาณแล้วครับ!", parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
@@ -217,7 +208,7 @@ def handle_callbacks(call):
         bot.answer_callback_query(call.id, text)
 
 print("--------------------------------------------------")
-print("⚡ TITAN FAST-START BOT พร้อมรัน...")
+print("⚡ TITAN CLEAN BOT พร้อมรัน...")
 print("--------------------------------------------------")
 
 broadcaster_thread = threading.Thread(target=auto_signal_broadcaster, daemon=True)
