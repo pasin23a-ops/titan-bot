@@ -27,27 +27,27 @@ state_lock = threading.Lock()
 atomic_market_cache = {}
 
 SYMBOLS = {
-    "DYDXUSDT": "⚡ DYDX (OTC)",
-    "XAUUSDT": "👑 XAUUSD (OTC)",
-    "XRPUSDT": "💎 RIPPLE (OTC)",
-    "LTCUSDT": "🔮 LITECOIN (OTC)",
-    "SUIUSDT": "💧 SUI (OTC)",
-    "SHIBUSDT": "🔥 SHIB/USD (OTC)",
-    "ONDOUSDT": "🌊 ONDO (OTC)",
-    "AIGUSDT": "🏛️ AIG (OTC)",
-    "KOUSDT": "🥤 COCA-COLA (OTC)",
-    "MCDUSDT": "🍟 MCDONALD'S (OTC)",
-    "PENGUUSDT": "🐧 PUDGY PENGUINS (OTC)",
-    "FARTCOINUSDT": "💨 FARTCOIN (OTC)",
-    "PENUSDT": "🇵🇪 PEN/USD (OTC)",
-    "SNAPUSDT": "👻 SNAP INC (OTC)",
-    "TRUMPUSDT": "🦅 TRUMP COIN (OTC)",
-    "VAULTUSDT": "🏦 VAULTA (OTC)",
-    "NKEUSDT": "👟 NIKE INC (OTC)",
-    "INTCUSDT": "💻 INTEL CORP (OTC)",
-    "MELANIAUSDT": "👑 MELANIA COIN (OTC)",
-    "GASUSDT": "⛽ NATURAL GAS (OTC)",
-    "XAGUSDT": "🛡️ XAGUSD (OTC)"
+    "DYDXUSDT": "DYDX(OTC)",
+    "XAUUSDT": "XAUUSD(OTC)",
+    "XRPUSDT": "RIPPLE(OTC)",
+    "LTCUSDT": "LITECOIN(OTC)",
+    "SUIUSDT": "SUI(OTC)",
+    "SHIBUSDT": "SHIB/USD(OTC)",
+    "ONDOUSDT": "ONDO(OTC)",
+    "AIGUSDT": "AIG(OTC)",
+    "KOUSDT": "COCA-COLA(OTC)",
+    "MCDUSDT": "MCDONALD'S(OTC)",
+    "PENGUUSDT": "PUDGY PENGUINS(OTC)",
+    "FARTCOINUSDT": "FARTCOIN(OTC)",
+    "PENUSDT": "PEN/USD(OTC)",
+    "SNAPUSDT": "SNAP INC(OTC)",
+    "TRUMPUSDT": "TRUMP COIN(OTC)",
+    "VAULTUSDT": "VAULTA(OTC)",
+    "NKEUSDT": "NIKE INC(OTC)",
+    "INTCUSDT": "INTEL CORP(OTC)",
+    "MELANIAUSDT": "MELANIA COIN(OTC)",
+    "GASUSDT": "NATURAL GAS(OTC)",
+    "XAGUSDT": "XAGUSD(OTC)"
 }
 
 def get_thai_time():
@@ -143,7 +143,6 @@ def raw_market_analysis(symbol):
     m5_ema20 = float(df_m5['ema_20'].iloc[-1])
     m5_is_uptrend = m5_close > m5_ema20
 
-    # ตรวจสอบแนวรับแนวต้านและไส้เทียนหลอก
     recent_highs = df_m1['high'].tail(30).max()
     recent_lows = df_m1['low'].tail(30).min()
     current_price = float(df_m1['close'].iloc[-1])
@@ -178,7 +177,6 @@ def raw_market_analysis(symbol):
     last_rsi = float(df_m1['rsi'].iloc[-1])
     last_open = float(df_m1['open'].iloc[-1])
 
-    # เกณฑ์ความมั่นใจล็อกที่ระดับ 94% พอดี
     is_call = (ema5 > ema20) and (current_price > last_open) and (last_macd > 0) and (52 < last_rsi < 68) and m5_is_uptrend
     is_put = (ema5 < ema20) and (current_price < last_open) and (last_macd < 0) and (32 < last_rsi < 48) and (not m5_is_uptrend)
 
@@ -227,10 +225,9 @@ def build_dynamic_menu_keyboard(symbol):
     )
     
     for sym, label in SYMBOLS.items():
-        pure_name = label.split(' ', 1)[1] if ' ' in label else label
+        pure_name = label
         dir_res, _, _, conf = omega_god_5000_layers_analysis(sym)
         
-        # ล็อกเกณฑ์แสดงผลเป็นสีเขียวเมื่อความมั่นใจผ่าน 94% ขึ้นไป
         if conf >= 94.0 and dir_res != "NONE":
             colored_label = f"🟢 {pure_name} [WIN 94%]"
         else:
@@ -271,9 +268,6 @@ def get_stats_text(chat_id):
         symbol_breakdown = "• ยังไม่มีประวัติการบันทึกแยกรายคู่"
     return text + symbol_breakdown
 
-# ==========================================
-# BACKGROUND WORKER: RESET & LOCK AT SECOND 30
-# ==========================================
 def background_live_refresher():
     last_refreshed_second = -1
     while True:
@@ -281,7 +275,6 @@ def background_live_refresher():
             now = get_thai_time()
             if now.second == 30 and now.second != last_refreshed_second:
                 last_refreshed_second = now.second
-                
                 update_all_symbols_cache()
 
                 for chat_id, info in list(user_last_message.items()):
@@ -300,7 +293,7 @@ def background_live_refresher():
                             reply_markup=markup,
                             parse_mode="Markdown"
                         )
-                    except Exception as sub_e:
+                    except Exception:
                         pass
             elif now.second != 30:
                 last_refreshed_second = -1
@@ -310,19 +303,12 @@ def background_live_refresher():
             print(f"⚠️ Background worker error: {e}")
             time.sleep(1)
 
-# ==========================================
-# TELEGRAM BOT HANDLERS WITH PASSWORD AUTH
-# ==========================================
 @bot.message_handler(commands=['email'])
 def register_email(message):
     try:
         args = message.text.split()
         if len(args) < 3:
-            bot.reply_to(
-                message, 
-                "⚠️ **กรุณาระบุอีเมลและรหัสผ่านให้ครบถ้วน**\n\n👉 รูปแบบ: `/email <อีเมล> <รหัสผ่าน>`", 
-                parse_mode="Markdown"
-            )
+            bot.reply_to(message, "⚠️ **กรุณาระบุอีเมลและรหัสผ่านให้ครบถ้วน**\n\n👉 รูปแบบ: `/email <อีเมล> <รหัสผ่าน>`", parse_mode="Markdown")
             return
         email = args[1].lower().strip()
         password = args[2].strip()
@@ -330,14 +316,9 @@ def register_email(message):
             user_creds[message.chat.id] = {"email": email, "password": password}
             user_martingale_step[message.chat.id] = 1
             update_all_symbols_cache()
-            bot.reply_to(
-                message, 
-                f"🔥 **94% PRECISION AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", 
-                reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"),
-                parse_mode="Markdown"
-            )
+            bot.reply_to(message, f"🔥 **94% PRECISION AUTHORIZATION SUCCESS** 🔥\nอีเมล `{email}` เชื่อมต่อระบบสำเร็จ เลือกคู่สินทรัพย์ลุยได้เลย:", reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"), parse_mode="Markdown")
         else:
-            bot.reply_to(message, "❌ **AUTHENTICATION FAILED:** ข้อมูลไม่ถูกต้องหรือสิทธิ์ถูกระงับ", parse_mode="Markdown")
+            bot.reply_to(message, "❌ **AUTHENTICATION FAILED:** ข้อมูลไม่ถูกต้องหรือสิทธิ์ถูกระغับ", parse_mode="Markdown")
     except Exception as e:
         bot.reply_to(message, f"❌ เกิดข้อผิดพลาด: {e}", parse_mode="Markdown")
 
@@ -350,20 +331,11 @@ def send_welcome(message):
     password = creds.get("password", "")
 
     if not email or not password or not check_user_approved(email, password):
-        bot.send_message(
-            chat_id, 
-            "🔥 **TITAN BEAM // 94% PRECISION FILTER CORE** 🔥\n\n🔒 กรุณายืนยันตัวตนระดับความปลอดภัยสูงสุด:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", 
-            parse_mode="Markdown"
-        )
+        bot.send_message(chat_id, "🔥 **TITAN BEAM // 94% VIP FORMAT** 🔥\n\n🔒 กรุณายืนยันตัวตน:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", parse_mode="Markdown")
         return
 
     update_all_symbols_cache()
-    bot.send_message(
-        chat_id, 
-        "🔥 **TITAN BEAM // 94% PRECISION FILTER CORE** 🔥\nเปิดระบบล็อก 94% พร้อมรีเซ็ตวินาทีที่ 30 พร้อมลุย:", 
-        reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"), 
-        parse_mode="Markdown"
-    )
+    bot.send_message(chat_id, "🔥 **TITAN BEAM // 94% VIP FORMAT** 🔥\nเปิดระบบส่งสัญญาณรูปแบบ VIP Card พร้อมลุย:", reply_markup=build_dynamic_menu_keyboard("DYDXUSDT"), parse_mode="Markdown")
 
 @bot.message_handler(commands=['stats'])
 def show_stats(message):
@@ -415,35 +387,6 @@ def handle_all(call):
         bot.send_message(chat_id, "🔄 รีเซ็ตสถิติและตั้งต้นไม้ที่ 1 ใหม่เรียบร้อย!", parse_mode="Markdown")
         return
 
-    if call.data.startswith("res_"):
-        parts = call.data.split("_")
-        result_type = parts[1]
-        symbol = parts[2] if len(parts) > 2 else ""
-        if symbol and symbol not in symbol_stats[chat_id]:
-            symbol_stats[chat_id][symbol] = {"win": 0, "loss": 0}
-
-        if result_type in ["win1", "win2", "win3"]:
-            if result_type == "win1": user_stats[chat_id]["win1"] += 1
-            elif result_type == "win2": user_stats[chat_id]["win2"] += 1
-            elif result_type == "win3": user_stats[chat_id]["win3"] += 1
-            if symbol: symbol_stats[chat_id][symbol]["win"] += 1
-            user_martingale_step[chat_id] = 1
-            text = "💎 ชนะออเดอร์! รีเซ็ตกลับสเต็ปไม้ 1 เรียบร้อย"
-        elif result_type == "loss":
-            step = user_martingale_step[chat_id]
-            if step < 3:
-                user_martingale_step[chat_id] += 1
-                text = f"⚠️ หลุดไม้ {step} ➔ ยกระดับลุยต่อ [ไม้ที่ {user_martingale_step[chat_id]}]"
-            else:
-                user_stats[chat_id]["loss"] += 1
-                user_martingale_step[chat_id] = 1
-                text = "❌ ครบ 3 สเต็ป บันทึก LOSS และรีเซ็ตกลับไม้ 1"
-        else:
-            text = "บันทึกข้อมูลเรียบร้อย"
-        bot.answer_callback_query(call.id, text)
-        bot.send_message(chat_id, f"📌 อัปเดตสถิติล่าสุด:\n{get_stats_text(chat_id)}", parse_mode="Markdown")
-        return
-
     if call.data.startswith("analyze_"):
         symbol = call.data.split("analyze_")[1]
         symbol_label = SYMBOLS.get(symbol, symbol)
@@ -462,42 +405,42 @@ def handle_all(call):
                 pass
             return
 
-        ttz_code, ttz_desc = check_market_zone_ttz()
-        ff_news = get_forex_factory_high_impact_news()
-        news_status = f"🌐 Forex Factory: ตรวจพบข่าวกล่องแดง {len(ff_news)} รายการ" if ff_news else "🌐 Forex Factory: สภาวะเสถียร (ไร้ข่าวแดงรุนแรง)"
-
         current_step = user_martingale_step.get(chat_id, 1)
         now_thai = get_thai_time()
         target_time = (now_thai + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
         target_time_str = target_time.strftime('%H:%M')
 
-        if symbol not in symbol_stats[chat_id]:
-            symbol_stats[chat_id][symbol] = {"win": 0, "loss": 0}
-        sym_data = symbol_stats[chat_id][symbol]
-        tot_sym = sym_data["win"] + sym_data["loss"]
-        sym_wr = (sym_data["win"] / tot_sym * 100) if tot_sym > 0 else 0.0
-
-        direction_icon = "🟢 CALL (ขึ้น)" if direction == "CALL" else "🔴 PUT (ลง)"
+        # จัดรูปแบบข้อความให้ตรงกับสไตล์การ์ด VIP ที่คุณต้องการ
+        is_buy = (direction == "CALL")
+        dir_emoji = "⬆️" if is_buy else "⬇️"
+        action_text = "BUY" if is_buy else "SELL"
+        btn_action_label = "CALL" if is_buy else "PUT"
 
         fixed_signal_text = (
-            f"🔥 **[ 94% PRECISION SIGNAL ]** 🔥\n"
-            f"━━━━━━━━━━━━━━━━━━━\n"
-            f"🎯 **คำสั่ง: ลุยออเดอร์ `[ ไม้ที่ {current_step} ]`**\n"
-            f"💲📊 สินทรัพย์: `{symbol_label}`\n"
-            f"💎 Timeframe: `M1` | Win Rate: `{sym_wr:.2f}%`\n"
-            f"⏱️ **เป้าหมายเวลาเข้าออเดอร์: `{target_time_str}`**\n\n"
-            f"🛡️ **[ PRECISION TELEMETRY ]**\n"
-            f"• {tech_used}\n"
-            f"• {zone_status}\n"
-            f"• {ttz_desc}\n"
-            f"• {news_status}\n"
-            f"• Accuracy Score: `{confidence_pct:.1f}%`\n"
-            f"━━━━━━━━━━━━━━━━━━━\n"
-            f"🚀 **ฟันธงทิศทาง: {direction_icon}**"
+            f"🇦🇪 **Titan Signal Official 👑 M1**\n"
+            f"🇦🇪 **Titan Signal Bot (VIP) [ไม้ที่ {current_step}]**\n\n"
+            f"💸 **{symbol_label}**\n"
+            f"💎 **M1**\n"
+            f"⌚ **{target_time_str}**\n"
+            f"{dir_emoji} **{action_text} 🟢**\n\n"
+            f"🛡️ `{tech_used}`\n"
+            f"📊 `Accuracy: {confidence_pct:.1f}%`"
         )
         
-        markup = build_dynamic_menu_keyboard(symbol)
-        sent_msg = bot.send_message(chat_id, fixed_signal_text, reply_markup=markup, parse_mode="Markdown")
+        # สร้างปุ่มกดด้านล่างแบบการ์ด VIP
+        vip_markup = InlineKeyboardMarkup(row_width=1)
+        vip_markup.add(
+            InlineKeyboardButton(f"{btn_action_label}", callback_data="do_nothing")
+        )
+        # แนบปุ่มบันทึกผลลัพธ์แยกไม้
+        vip_markup.add(
+            InlineKeyboardButton("💎 ชนะไม้ 1", callback_data=f"res_win1_{symbol}"),
+            InlineKeyboardButton("🥈 ชนะไม้ 2", callback_data=f"res_win2_{symbol}"),
+            InlineKeyboardButton("🥉 ชนะไม้ 3", callback_data=f"res_win3_{symbol}"),
+            InlineKeyboardButton("❌ แพ้ (LOSS)", callback_data=f"res_loss_{symbol}")
+        )
+        
+        sent_msg = bot.send_message(chat_id, fixed_signal_text, reply_markup=vip_markup, parse_mode="Markdown")
         
         user_last_message[chat_id] = {
             "message_id": sent_msg.message_id, 
@@ -506,7 +449,7 @@ def handle_all(call):
         }
 
 print("--------------------------------------------------")
-print("🔥 TITAN 94% PRECISION FILTER CORE เริ่มต้นระบบเรียบร้อย...")
+print("🔥 TITAN VIP CARD FORMAT (94%) เริ่มต้นระบบเรียบร้อย...")
 print("--------------------------------------------------")
 
 update_all_symbols_cache()
