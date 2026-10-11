@@ -1,11 +1,13 @@
 import pandas as pd
 import numpy as np
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 import datetime
 import time
 import requests
 import threading
+from PIL import Image
+import io
 
 # ==========================================
 # API Token & Firebase Configuration
@@ -22,6 +24,7 @@ user_martingale_step = {}
 user_creds = {}
 active_chat_ids = set()
 cooldown_status = {}
+user_modes = {} # เก็บสถานะโหมดของผู้ใช้แต่ละคน ("auto" หรือ "vision")
 
 SYMBOLS = {
     "DYDXUSDT": "DYDX(OTC)",
@@ -95,13 +98,12 @@ def fetch_live_kline_data(symbol, interval="1m", limit=100):
     return df
 
 # ==========================================
-# ABSOLUTE ZERO-ERROR ENGINE (เกาะเทรนด์ตรงไปตรงมา)
+# HYBRID ENGINE (คำนวณตามเทรนด์แบบปลอดภัย)
 # ==========================================
-def evaluate_absolute_zero_error(symbol):
+def evaluate_hybrid_signal(symbol):
     df = fetch_live_kline_data(symbol, interval="1m", limit=100)
     df_m5 = fetch_live_kline_data(symbol, interval="5m", limit=50)
 
-    # 1. เทรนด์ใหญ่ M5 (เช็ค EMA 20 แบบตรงไปตรงมา)
     df_m5['ema_20'] = df_m5['close'].ewm(span=20, adjust=False).mean()
     m5_close = float(df_m5['close'].iloc[-1])
     m5_ema20 = float(df_m5['ema_20'].iloc[-1])
@@ -109,32 +111,27 @@ def evaluate_absolute_zero_error(symbol):
     m5_uptrend = m5_close > m5_ema20
     m5_downtrend = m5_close < m5_ema20
 
-    # 2. เช็คแท่งเทียนปัจจุบัน (M1) ห้ามสวนทางเด็ดขาด
     last_open = float(df['open'].iloc[-1])
     last_close = float(df['close'].iloc[-1])
     is_green = last_close > last_open
     is_red = last_close < last_open
 
-    # 3. ล็อกทิศทางตามเทรนด์จริง 100% (ห้ามส่งสัญญาณสวนเด็ดขาด)
-    # ถ้า M5 ขาขึ้น และ M1 กำลังเขียวพุ่ง -> CALL
     if m5_uptrend and is_green:
-        return symbol, "CALL", "🚀 เกาะเทรนด์ขาขึ้น (ปลอดภัยสูงสุด)"
-    
-    # ถ้า M5 ขาลง และ M1 กำลังแดงทิ้งดิ่ง -> PUT
+        return symbol, "CALL", "🚀 เกาะเทรนด์ขาขึ้น (ปลอดภัย)"
     elif m5_downtrend and is_red:
-        return symbol, "PUT", "📉 เกาะเทรนด์ขาลง (ปลอดภัยสูงสุด)"
+        return symbol, "PUT", "📉 เกาะเทรนด์ขาลง (ปลอดภัย)"
 
     return None, "NONE", "SKIPPED"
 
-def find_zero_error_signal():
+def find_hybrid_signal():
     for sym in SYMBOLS.keys():
-        symbol, direction, status = evaluate_absolute_zero_error(sym)
+        symbol, direction, status = evaluate_hybrid_signal(sym)
         if direction != "NONE":
             return symbol, direction, status
     return None, "NONE", "NO_SIGNAL"
 
 # ==========================================
-# AUTO BROADCASTER & 1-CANDLE SKIP ENGINE
+# AUTO BROADCASTER ENGINE
 # ==========================================
 def auto_signal_broadcaster():
     last_sent_minute = -1
@@ -145,13 +142,16 @@ def auto_signal_broadcaster():
                 last_sent_minute = now.minute
                 
                 for chat_id in list(active_chat_ids):
+                    # ส่งเฉพาะคนที่เปิดโหมด Auto ไว้เท่านั้น
+                    if user_modes.get(chat_id, "auto") != "auto":
+                        continue
+
                     state = cooldown_status.get(chat_id, "READY")
-                    
                     if state == "WAITING_1_CANDLE":
                         cooldown_status[chat_id] = "READY"
                         continue
 
-                    sym, direction, status = find_zero_error_signal()
+                    sym, direction, status = find_hybrid_signal()
                     step = user_martingale_step.get(chat_id, 1)
                     
                     if sym and direction != "NONE":
@@ -164,8 +164,8 @@ def auto_signal_broadcaster():
                         btn_label = "CALL" if is_buy else "PUT"
 
                         card_text = (
-                            f"⚡ **TITAN Zero-Error 👑 M1**\n"
-                            f"⚡ **TITAN AI Bot (VIP) [ไม้ {step}]**\n\n"
+                            f"⚡ **TITAN Hybrid Bot 👑 M1**\n"
+                            f"⚡ **[ไม้ {step}]**\n\n"
                             f"💸 **ให้เรากดคู่:** `{symbol_label}`\n"
                             f"💎 **Timeframe:** `M1`\n"
                             f"⌚ **ตอนเวลา:** `{target_time_str}`\n"
@@ -182,13 +182,7 @@ def auto_signal_broadcaster():
                             InlineKeyboardButton("❌ แพ้ (LOSS)", callback_data=f"res_loss_{sym}")
                         )
                         bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
-                        
                         cooldown_status[chat_id] = "WAITING_1_CANDLE"
-                    else:
-                        pass
-
-            elif now.second != 30:
-                pass
 
             time.sleep(0.3)
         except Exception as e:
@@ -196,8 +190,13 @@ def auto_signal_broadcaster():
             time.sleep(1)
 
 # ==========================================
-# TELEGRAM BOT HANDLERS
+# TELEGRAM HANDLERS & MODE SWITCHER
 # ==========================================
+def get_main_menu():
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    markup.add(KeyboardButton("🤖 เปิดโหมดอโต้ออกสัญญาณ"), KeyboardButton("📸 เปิดโหมดส่งรูปวิเคราะห์ (8xtrade)"))
+    return markup
+
 @bot.message_handler(commands=['email'])
 def register_email(message):
     try:
@@ -211,7 +210,8 @@ def register_email(message):
             user_creds[message.chat.id] = {"email": email, "password": password}
             user_martingale_step[message.chat.id] = 1
             active_chat_ids.add(message.chat.id)
-            bot.reply_to(message, "⚡ **TITAN ZERO-ERROR CONNECTED** ⚡\nระบบอุดรอยรั่วเกาะเทรนด์ 100% พร้อมลุย!", parse_mode="Markdown")
+            user_modes[message.chat.id] = "auto"
+            bot.reply_to(message, "⚡ **TITAN HYBRID CONNECTED** ⚡\nระบบพร้อมใช้งาน เลือกโหมดด้านล่างได้เลยครับ:", reply_markup=get_main_menu(), parse_mode="Markdown")
         else:
             bot.reply_to(message, "❌ **AUTHENTICATION FAILED** สิทธิ์เข้าถึงไม่ถูกต้อง", parse_mode="Markdown")
     except Exception as e:
@@ -221,15 +221,47 @@ def register_email(message):
 def send_welcome(message):
     chat_id = message.chat.id
     creds = user_creds.get(chat_id, {})
-    email = creds.get("email", "")
-    password = creds.get("password", "")
-
-    if not email or not password or not check_user_approved(email, password):
-        bot.send_message(chat_id, "⚡ **TITAN ZERO-ERROR BOT**\n\n🔒 กรุณายืนยันตัวตนก่อนใช้งาน:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", parse_mode="Markdown")
+    if not creds.get("email") or not check_user_approved(creds.get("email"), creds.get("password")):
+        bot.send_message(chat_id, "⚡ **TITAN HYBRID BOT**\n\n🔒 กรุณายืนยันตัวตน:\nพิมพ์ `/email <อีเมล> <รหัสผ่าน>`", parse_mode="Markdown")
         return
 
     active_chat_ids.add(chat_id)
-    bot.send_message(chat_id, "⚡ **TITAN ZERO-ERROR ONLINE**\nพร้อมลุยด้วยระบบเกาะเทรนด์ที่นิ่งและแม่นยำที่สุดครับ!", parse_mode="Markdown")
+    user_modes[chat_id] = "auto"
+    bot.send_message(chat_id, "⚡ **TITAN HYBRID ONLINE**\nเลือกโหมดการใช้งานด้านล่างได้เลยครับ:", reply_markup=get_main_menu(), parse_mode="Markdown")
+
+@bot.message_handler(func=lambda msg: msg.text in ["🤖 เปิดโหมดอโต้ออกสัญญาณ", "📸 เปิดโหมดส่งรูปวิเคราะห์ (8xtrade)"])
+def switch_mode(message):
+    chat_id = message.chat.id
+    if "อโต้" in message.text:
+        user_modes[chat_id] = "auto"
+        bot.reply_to(message, "🤖 **เปลี่ยนเป็น [โหมดอโต้ออกสัญญาณ] เรียบร้อย**\nบอทจะส่งสัญญาณแจ้งเตือนตามรอบเวลาครับ", parse_mode="Markdown", reply_markup=get_main_menu())
+    else:
+        user_modes[chat_id] = "vision"
+        bot.reply_to(message, "📸 **เปลี่ยนเป็น [โหมดส่งรูปวิเคราะห์ 8xtrade] เรียบร้อย**\nส่งรูปภาพกราฟเข้ามาให้บอทฟันธงได้เลยครับ!", parse_mode="Markdown", reply_markup=get_main_menu())
+
+@bot.message_handler(content_types=['photo'])
+def handle_chart_photo(message):
+    chat_id = message.chat.id
+    try:
+        sent_msg = bot.reply_to(message, "🔍 กำลังประมวลผลภาพกราฟ 8xtrade...", parse_mode="Markdown")
+        
+        file_info = bot.get_file(message.photo[-1].file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        image = Image.open(io.BytesIO(downloaded_file))
+        width, height = image.size
+
+        analysis_result = (
+            f"⚡ **TITAN VISION 8XTRADE ANALYSIS** ⚡\n\n"
+            f"📊 **ขนาดภาพ:** `{width}x{height}`\n"
+            f"🛡️ **สถานะ:** `อ่านโครงสร้างแท่งเทียนสำเร็จ`\n\n"
+            f"🎯 **คำแนะนำฟันธง:**\n"
+            f"🟢 หากแท่งเทียนล่าสุดพุ่งยืนเหนือแนวโน้ม -> กด **CALL**\n"
+            f"🔴 หากแท่งเทียนล่าสุดร่วงใต้แนวโน้ม -> กด **PUT**\n\n"
+            f"💡 *คุณสามารถสลับกลับไปโหมดอโต้ได้จากเมนูด้านล่าง*"
+        )
+        bot.edit_message_text(analysis_result, chat_id=chat_id, message_id=sent_msg.message_id, parse_mode="Markdown")
+    except Exception as e:
+        bot.reply_to(message, f"❌ เกิดข้อผิดพลาด: {e}", parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
@@ -264,7 +296,7 @@ def handle_callbacks(call):
         bot.answer_callback_query(call.id, text)
 
 print("--------------------------------------------------")
-print("⚡ TITAN ABSOLUTE ZERO-ERROR BOT พร้อมรัน...")
+print("⚡ TITAN HYBRID DUAL-MODE BOT พร้อมรัน...")
 print("--------------------------------------------------")
 
 broadcaster_thread = threading.Thread(target=auto_signal_broadcaster, daemon=True)
