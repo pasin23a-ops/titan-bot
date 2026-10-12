@@ -11,15 +11,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 
 active_chat_ids = set()
 user_martingale_step = {}
-last_global_signal_time = 0 
-
-best_candidate_cache = {
-    "symbol": "DYDXUSDT",
-    "label": "DYDX(OTC)",
-    "direction": "CALL",
-    "status": "INITIALIZING",
-    "score": 0
-}
+user_selected_symbol = {}  # เก็บค่าคู่เงินที่ผู้ใช้เลือกเอง (แยกตามแชท)
 
 SYMBOLS = {
     "DYDXUSDT": "DYDX(OTC)",
@@ -64,73 +56,33 @@ def fetch_kline(symbol, interval="1m", limit=30):
         pass
     return None
 
-def analyze_trend_flow(symbol):
+def analyze_symbol(symbol):
     df = fetch_kline(symbol, "1m", 30)
     if df is None or len(df) < 20:
-        return "CALL", 50, "DEFAULT UPTREND"
+        return "CALL", 0, "NEUTRAL"
 
     df['ema_10'] = df['close'].ewm(span=10, adjust=False).mean()
     df['ema_20'] = df['close'].ewm(span=20, adjust=False).mean()
 
     c = float(df['close'].iloc[-2])
+    o = float(df['open'].iloc[-2])
     ema10 = float(df['ema_10'].iloc[-2])
     ema20 = float(df['ema_20'].iloc[-2])
 
-    score = int((abs(c - ema20) / (ema20 + 1e-9)) * 10000)
-
-    # อิงตามเส้น EMA หลักเพื่อไม่ให้สัญญาณขาดหาย และไม่สวนทางเทรนด์หลัก
-    if c >= ema20:
-        return "CALL", score + 500, f"UPTREND FLOW (Score: {score + 500})"
+    # เช็กความแรงและทิศทางเทรนด์
+    if c > ema10 and ema10 > ema20 and c > o:
+        return "CALL", 80, "STRONG UPTREND"
+    elif c < ema10 and ema10 < ema20 and c < o:
+        return "PUT", 80, "STRONG DOWNTREND"
+    elif c >= ema20:
+        return "CALL", 40, "WEAK UPTREND"
     else:
-        return "PUT", score + 500, f"DOWNTREND FLOW (Score: {score + 500})"
+        return "PUT", 40, "WEAK DOWNTREND"
 
-def background_deep_scanner():
-    global best_candidate_cache
-    while True:
-        try:
-            top_sym = None
-            top_dir = "CALL"
-            top_status = "SCANNING"
-            highest_score = -99999
-
-            for sym in SYMBOLS.keys():
-                direction, score, status = analyze_trend_flow(sym)
-                if score > highest_score:
-                    highest_score = score
-                    top_sym = sym
-                    top_dir = direction
-                    top_status = status
-
-            if not top_sym:
-                top_sym = "DYDXUSDT"
-
-            best_candidate_cache = {
-                "symbol": top_sym,
-                "label": SYMBOLS.get(top_sym, top_sym),
-                "direction": top_dir,
-                "status": top_status,
-                "score": highest_score
-            }
-            time.sleep(2)
-        except Exception as e:
-            print(f"Scanner Error: {e}")
-            time.sleep(3)
-
-def send_signal(chat_id):
-    global last_global_signal_time
+def send_signal_for_symbol(chat_id, sym):
     try:
-        now_time = time.time()
-        
-        # คูลดาวน์สัญญาณภาพรวม 1 แท่งเทียน (65 วินาที)
-        if now_time - last_global_signal_time < 65:
-            return
-
-        sym = best_candidate_cache["symbol"]
-        label = best_candidate_cache["label"]
-        direction = best_candidate_cache["direction"]
-        status = best_candidate_cache["status"]
-
-        last_global_signal_time = now_time
+        label = SYMBOLS.get(sym, sym)
+        direction, score, status = analyze_symbol(sym)
 
         step = user_martingale_step.get(chat_id, 1)
         now = get_thai_time()
@@ -138,18 +90,17 @@ def send_signal(chat_id):
         target_time_str = target_time.strftime('%H:%M')
 
         is_buy = (direction == "CALL")
-        dir_emoji = "⬆️ BUY 🟢 (Trend Following)" if is_buy else "⬇️ SELL 🔴 (Trend Following)"
+        dir_emoji = "⬆️ BUY 🟢" if is_buy else "⬇️ SELL 🔴"
         btn_label = "CALL" if is_buy else "PUT"
 
         card_text = (
-            f"👑 **TITAN RELIABLE MASTER 👑 M1**\n"
+            f"👑 **TITAN MANUAL SELECTOR 👑 M1**\n"
             f"⚡ **[ไม้ {step}]**\n\n"
-            f"🔥 **คู่ที่ดีที่สุดตามเทรนด์:** `{label}`\n"
-            f"📈 **Timeframe:** `M1 (Continuous Flow)`\n"
+            f"🎯 **คู่ที่คุณเลือก:** `{label}`\n"
+            f"📈 **Timeframe:** `M1 (Manual Pick)`\n"
             f"⌚ **เข้าออเดอร์เวลา:** `{target_time_str}`\n"
             f"🚀 **ทิศทาง:** **{dir_emoji}**\n\n"
-            f"🛡️ **สถานะ:** `{status}`\n"
-            f"⏱️ **Cooldown:** `พักระบบสัญญาณ 1 แท่งเทียน`"
+            f"🛡️ **สถานะ:** `{status} (Score: {score})`"
         )
 
         markup = InlineKeyboardMarkup(row_width=1)
@@ -164,34 +115,49 @@ def send_signal(chat_id):
     except Exception as e:
         print(f"Send Error: {e}")
 
-def auto_broadcaster():
-    last_sent_minute = -1
-    while True:
-        try:
-            now = get_thai_time()
-            if now.second == 30 and now.minute != last_sent_minute:
-                last_sent_minute = now.minute
-                for cid in list(active_chat_ids):
-                    send_signal(cid)
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"Loop Error: {e}")
-            time.sleep(2)
-
-@bot.message_handler(commands=['start', 'scan'])
-def handle_start_scan(message):
+@bot.message_handler(commands=['start', 'pair', 'menu'])
+def handle_menu(message):
     chat_id = message.chat.id
     active_chat_ids.add(chat_id)
     if chat_id not in user_martingale_step:
         user_martingale_step[chat_id] = 1
-    bot.reply_to(message, "⚡ **TITAN RELIABLE MODE ONLINE**\nเปิดระบบส่งสัญญาณต่อเนื่องทุกนาทีเรียบร้อย!", parse_mode="Markdown")
+
+    # สร้างปุ่มช้อยส์คู่เงินทั้งหมด 21 คู่ พร้อมเช็กสีความมั่นใจ (เขียว = มั่นใจสูง, แดง = ยังไม่มั่นใจ)
+    markup = InlineKeyboardMarkup(row_width=2)
+    for sym, label in SYMBOLS.items():
+        _, score, _ = analyze_symbol(sym)
+        # ถ้าคะแนน >= 70 ให้เป็นสีเขียว (มั่นใจ) ถ้าต่ำกว่าให้เป็นสีแดง (ไม่มั่นใจ)
+        dot = "🟢" if score >= 70 else "🔴"
+        btn_text = f"{dot} {label}"
+        markup.add(InlineKeyboardButton(btn_text, callback_data=f"select_{sym}"))
+
+    bot.reply_to(
+        message, 
+        "⚡ **TITAN MANUAL CHOOSE MODE** ⚡\n"
+        "เลือกคู่เงินที่ต้องการเทรนด์ด้านล่างได้เลยครับ:\n"
+        "🟢 = บอทมั่นใจ (โครงสร้างเทรนด์ชัด)\n"
+        "🔴 = บอทมองว่ายังไม่ค่อยนิ่ง/ความมั่นใจต่ำ", 
+        reply_markup=markup, 
+        parse_mode="Markdown"
+    )
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     chat_id = call.message.chat.id
+    
     if call.data == "do_nothing":
         bot.answer_callback_query(call.id, "⚡ Signal Locked")
         return
+
+    # เมื่อผู้ใช้กดเลือกคู่เงินจากช้อยส์
+    if call.data.startswith("select_"):
+        sym = call.data.replace("select_", "")
+        user_selected_symbol[chat_id] = sym
+        bot.answer_callback_query(call.id, f"✅ เลือก {SYMBOLS.get(sym, sym)} แล้ว!")
+        send_signal_for_symbol(chat_id, sym)
+        return
+
+    # จัดการผลแพ้ชนะ (Martingale)
     if call.data.startswith("res_"):
         parts = call.data.split("_")
         res_type = parts[1]
@@ -202,9 +168,6 @@ def handle_callbacks(call):
             step = user_martingale_step.get(chat_id, 1)
             user_martingale_step[chat_id] = 1 if step >= 3 else step + 1
             bot.answer_callback_query(call.id, f"⚠️ ปรับสู่ไม้ {user_martingale_step[chat_id]}")
-
-threading.Thread(target=background_deep_scanner, daemon=True).start()
-threading.Thread(target=auto_broadcaster, daemon=True).start()
 
 while True:
     try:
