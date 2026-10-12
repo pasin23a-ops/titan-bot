@@ -40,7 +40,7 @@ SYMBOLS = {
 def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
-def fetch_kline(symbol, interval, limit=40):
+def fetch_kline(symbol, interval, limit=30):
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
         res = requests.get(url, timeout=3)
@@ -51,96 +51,70 @@ def fetch_kline(symbol, interval, limit=40):
             df['open'] = df['open'].astype(float)
             df['high'] = df['high'].astype(float)
             df['low'] = df['low'].astype(float)
-            df['volume'] = df['volume'].astype(float)
             return df
     except Exception:
         pass
     return None
 
-def analyze_future_scenarios(symbol):
-    df_m5 = fetch_kline(symbol, "5m", 20)
-    df_m1 = fetch_kline(symbol, "1m", 30)
+def analyze_force_trend(symbol):
+    df = fetch_kline(symbol, "1m", 25)
+    if df is None or len(df) < 15:
+        return "CALL", 50, "FORCE_DEFAULT"
 
-    if df_m5 is None or len(df_m5) < 10 or df_m1 is None or len(df_m1) < 20:
-        return "NONE", 0, "DATA_ERROR"
+    # ใช้เส้น EMA 14 เป็นตัวแบ่งเทรนด์หลักระยะสั้น
+    df['ema_14'] = df['close'].ewm(span=14, adjust=False).mean()
+    
+    o = float(df['open'].iloc[-2])
+    c = float(df['close'].iloc[-2])
+    ema = float(df['ema_14'].iloc[-2])
+    
+    score = int((abs(c - ema) / (ema + 1e-9)) * 10000)
 
-    # 1. วิเคราะห์เทรนด์หลักจาก M5 (แท่งที่ปิดแล้ว)
-    df_m5['ema_20'] = df_m5['close'].ewm(span=20, adjust=False).mean()
-    m5_close = float(df_m5['close'].iloc[-2])
-    m5_ema = float(df_m5['ema_20'].iloc[-2])
-    is_m5_uptrend = m5_close > m5_ema
-    is_m5_downtrend = m5_close < m5_ema
+    # เช็กตามเทรนด์: ราคาปิดอยู่เหนือเส้น EMA ให้ตาม CALL / อยู่ใต้เส้น EMA ให้ตาม PUT
+    if c >= ema:
+        return "CALL", score + 100, f"TREND-FOLLOWING UP (Score: {score + 100})"
+    else:
+        return "PUT", score + 100, f"TREND-FOLLOWING DOWN (Score: {score + 100})"
 
-    # 2. วิเคราะห์ M1 และจำลองอนาคต (Scenario Projection)
-    df_m1['ema_20'] = df_m1['close'].ewm(span=20, adjust=False).mean()
-    o = float(df_m1['open'].iloc[-2])
-    c = float(df_m1['close'].iloc[-2])
-    ema = float(df_m1['ema_20'].iloc[-2])
-    vol = float(df_m1['volume'].iloc[-2])
-    avg_vol = df_m1['volume'].iloc[-10:-2].mean()
-
-    body_size = abs(c - o)
-    score_base = int((abs(c - ema) / (ema + 1e-9)) * 10000)
-
-    # จำลอง Scenario A: Momentum Continuation (ไปต่อตามเทรนด์)
-    if is_m5_uptrend and c > ema and c > o:
-        score = score_base + int((vol / (avg_vol + 1e-9)) * 50)
-        return "CALL", score, f"SCENARIO: UPTREND CONTINUATION (Score: {score})"
-
-    elif is_m5_downtrend and c < ema and c < o:
-        score = score_base + int((vol / (avg_vol + 1e-9)) * 50)
-        return "PUT", score, f"SCENARIO: DOWNTREND CONTINUATION (Score: {score})"
-
-    # จำลอง Scenario B: Pullback / Trend Support (ย่อตัวรับเทรนด์)
-    if is_m5_uptrend and c >= ema:
-        score = score_base + 30
-        return "CALL", score, f"SCENARIO: M5 BULLISH PULLBACK (Score: {score})"
-
-    elif is_m5_downtrend and c <= ema:
-        score = score_base + 30
-        return "PUT", score, f"SCENARIO: M5 BEARISH PULLBACK (Score: {score})"
-
-    return "NONE", 0, "SCENARIO: UNCERTAIN / NO MATCH"
-
-def find_best_signal_scenarios():
+def find_best_signal_forced():
     now_time = time.time()
     best_sym = None
     best_dir = "NONE"
     best_status = "NO_SIGNAL"
     highest_score = -999
 
-    # เคลียร์คูลดาวน์เก่า (3 นาที)
-    expired = [s for s, t in symbol_cooldown.items() if now_time - t > 180]
+    # เคลียร์คูลดาวน์เก่า (ลดเวลาเหลือ 2 นาที เพื่อให้วนกลับมาเล่นไวขึ้น)
+    expired = [s for s, t in symbol_cooldown.items() if now_time - t > 120]
     for s in expired:
         del symbol_cooldown[s]
 
+    # สแกนหาตัวที่คะแนนดีที่สุดและไม่อยู่ในคูลดาวน์
     for sym in SYMBOLS.keys():
         if sym in symbol_cooldown:
             continue
 
-        direction, score, status = analyze_future_scenarios(sym)
-        if direction != "NONE" and score > highest_score:
+        direction, score, status = analyze_force_trend(sym)
+        if score > highest_score:
             highest_score = score
             best_sym = sym
             best_dir = direction
             best_status = status
 
-    if not best_sym and SYMBOLS:
+    # กรณีทุกตัวติดคูลดาวน์ บังคับดึงคู่แรกมาส่งทันที ห้ามเงียบ
+    if not best_sym:
         best_sym = list(SYMBOLS.keys())[0]
-        best_dir, highest_score, best_status = analyze_future_scenarios(best_sym)
+        best_dir, highest_score, best_status = analyze_force_trend(best_sym)
 
     if best_sym:
         symbol_cooldown[best_sym] = now_time
         return best_sym, SYMBOLS.get(best_sym, best_sym), best_dir, best_status
 
-    return None, None, "NONE", "NO_SIGNAL"
+    # ป้องกันขั้นสุดท้าย ถ้ายังหลุดอีกบังคับใช้คู่หลัก
+    return "DYDXUSDT", "DYDX(OTC)", "CALL", "AUTO-FORCE SIGNAL"
 
 def send_signal(chat_id):
     try:
-        sym, label, direction, status = find_best_signal_scenarios()
-        if not sym or direction == "NONE":
-            return
-
+        sym, label, direction, status = find_best_signal_forced()
         step = user_martingale_step.get(chat_id, 1)
         now = get_thai_time()
         target_time = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
@@ -151,14 +125,14 @@ def send_signal(chat_id):
         btn_label = "CALL" if is_buy else "PUT"
 
         card_text = (
-            f"👑 **TITAN SCENARIO MASTER 👑 M1**\n"
+            f"👑 **TITAN FORCE-TREND MASTER 👑 M1**\n"
             f"⚡ **[ไม้ {step}]**\n\n"
-            f"💎 **คู่ที่ดีที่สุดตามเทรนด์:** `{label}`\n"
-            f"📈 **Timeframe:** `M1 + M5 Trend Filter`\n"
+            f"💎 **คู่ที่ถูกเลือกตามเทรนด์:** `{label}`\n"
+            f"📈 **Timeframe:** `M1 (EMA Trend Engine)`\n"
             f"⌚ **เข้าออเดอร์เวลา:** `{target_time_str}`\n"
             f"🚀 **ทิศทาง:** **{dir_emoji}**\n\n"
-            f"🛡️ **การสแกนจำลอง:** `{status}`\n"
-            f"⏱️ **Cooldown:** `เปิดใช้งาน (พักคู่เดิม 3 นาที)`"
+            f"🛡️ **สถานะ:** `{status}`\n"
+            f"⏱️ **Cooldown:** `พักคู่เดิม 2 นาที`"
         )
 
         markup = InlineKeyboardMarkup(row_width=1)
@@ -193,7 +167,7 @@ def handle_start_scan(message):
     active_chat_ids.add(chat_id)
     if chat_id not in user_martingale_step:
         user_martingale_step[chat_id] = 1
-    bot.reply_to(message, "⚡ **TITAN SCENARIO ENGINE ONLINE**\nเปิดระบบสแกนจำลองทิศทางอนาคตตามเทรนด์หลักเรียบร้อย!", parse_mode="Markdown")
+    bot.reply_to(message, "⚡ **TITAN FORCE-TREND ONLINE**\nเปิดระบบบังคับส่งสัญญาณตามเทรนด์ต่อเนื่องทุกนาทีเรียบร้อย! ลองพิมพ์ `/scan` ทดสอบได้เลย", parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
