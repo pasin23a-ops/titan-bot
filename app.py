@@ -11,6 +11,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 
 active_chat_ids = set()
 user_martingale_step = {}
+symbol_cooldown = {}
 
 SYMBOLS = {
     "DYDXUSDT": "DYDX(OTC)",
@@ -56,75 +57,108 @@ def fetch_kline(symbol, interval, limit=40):
         pass
     return None
 
-def analyze_balanced(symbol):
+def analyze_future_scenarios(symbol):
+    df_m5 = fetch_kline(symbol, "5m", 20)
     df_m1 = fetch_kline(symbol, "1m", 30)
-    if df_m1 is None or len(df_m1) < 20:
+
+    if df_m5 is None or len(df_m5) < 10 or df_m1 is None or len(df_m1) < 20:
         return "NONE", 0, "DATA_ERROR"
 
-    # ใช้แท่งที่ปิดแล้ว (iloc[-2]) เพื่อความชัวร์เรื่องราคาปิดจริง
+    # 1. วิเคราะห์เทรนด์หลักจาก M5 (แท่งที่ปิดแล้ว)
+    df_m5['ema_20'] = df_m5['close'].ewm(span=20, adjust=False).mean()
+    m5_close = float(df_m5['close'].iloc[-2])
+    m5_ema = float(df_m5['ema_20'].iloc[-2])
+    is_m5_uptrend = m5_close > m5_ema
+    is_m5_downtrend = m5_close < m5_ema
+
+    # 2. วิเคราะห์ M1 และจำลองอนาคต (Scenario Projection)
     df_m1['ema_20'] = df_m1['close'].ewm(span=20, adjust=False).mean()
-    
     o = float(df_m1['open'].iloc[-2])
     c = float(df_m1['close'].iloc[-2])
     ema = float(df_m1['ema_20'].iloc[-2])
+    vol = float(df_m1['volume'].iloc[-2])
+    avg_vol = df_m1['volume'].iloc[-10:-2].mean()
 
-    is_green = c > o
     body_size = abs(c - o)
-    score = int((abs(c - ema) / (ema + 1e-9)) * 10000)
+    score_base = int((abs(c - ema) / (ema + 1e-9)) * 10000)
 
-    # เงื่อนไขสมดุล: ขอแค่ราคาปิดอยู่เหนือ/ใต้เส้น EMA และมีเนื้อเทียนชัดเจน
-    if c > ema and is_green:
-        return "CALL", score + 100, f"MOMENTUM UP (Score: {score + 100})"
-    elif c < ema and not is_green:
-        return "PUT", score + 100, f"MOMENTUM DOWN (Score: {score + 100})"
+    # จำลอง Scenario A: Momentum Continuation (ไปต่อตามเทรนด์)
+    if is_m5_uptrend and c > ema and c > o:
+        score = score_base + int((vol / (avg_vol + 1e-9)) * 50)
+        return "CALL", score, f"SCENARIO: UPTREND CONTINUATION (Score: {score})"
 
-    # Fallback อ่อนๆ ภายในฟังก์ชัน เพื่อให้เลือกตัวที่ใกล้เคียงที่สุดมาส่งได้เสมอ
-    if c >= ema:
-        return "CALL", score, f"WEAK UP (Score: {score})"
-    else:
-        return "PUT", score, f"WEAK DOWN (Score: {score})"
+    elif is_m5_downtrend and c < ema and c < o:
+        score = score_base + int((vol / (avg_vol + 1e-9)) * 50)
+        return "PUT", score, f"SCENARIO: DOWNTREND CONTINUATION (Score: {score})"
 
-def find_best_signal():
+    # จำลอง Scenario B: Pullback / Trend Support (ย่อตัวรับเทรนด์)
+    if is_m5_uptrend and c >= ema:
+        score = score_base + 30
+        return "CALL", score, f"SCENARIO: M5 BULLISH PULLBACK (Score: {score})"
+
+    elif is_m5_downtrend and c <= ema:
+        score = score_base + 30
+        return "PUT", score, f"SCENARIO: M5 BEARISH PULLBACK (Score: {score})"
+
+    return "NONE", 0, "SCENARIO: UNCERTAIN / NO MATCH"
+
+def find_best_signal_scenarios():
+    now_time = time.time()
     best_sym = None
     best_dir = "NONE"
     best_status = "NO_SIGNAL"
     highest_score = -999
 
+    # เคลียร์คูลดาวน์เก่า (3 นาที)
+    expired = [s for s, t in symbol_cooldown.items() if now_time - t > 180]
+    for s in expired:
+        del symbol_cooldown[s]
+
     for sym in SYMBOLS.keys():
-        direction, score, status = analyze_balanced(sym)
+        if sym in symbol_cooldown:
+            continue
+
+        direction, score, status = analyze_future_scenarios(sym)
         if direction != "NONE" and score > highest_score:
             highest_score = score
             best_sym = sym
             best_dir = direction
             best_status = status
 
+    if not best_sym and SYMBOLS:
+        best_sym = list(SYMBOLS.keys())[0]
+        best_dir, highest_score, best_status = analyze_future_scenarios(best_sym)
+
     if best_sym:
+        symbol_cooldown[best_sym] = now_time
         return best_sym, SYMBOLS.get(best_sym, best_sym), best_dir, best_status
-    
-    # ถ้ายังหลุดอีก บังคับเลือกตัวแรกส่งทันทีเพื่อให้บอทไม่เงียบ
-    first_sym = list(SYMBOLS.keys())[0]
-    return first_sym, SYMBOLS.get(first_sym), "CALL", "AUTO-FLOW (Score: 50)"
+
+    return None, None, "NONE", "NO_SIGNAL"
 
 def send_signal(chat_id):
     try:
-        sym, label, direction, status = find_best_signal()
+        sym, label, direction, status = find_best_signal_scenarios()
+        if not sym or direction == "NONE":
+            return
+
         step = user_martingale_step.get(chat_id, 1)
         now = get_thai_time()
         target_time = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
         target_time_str = target_time.strftime('%H:%M')
 
         is_buy = (direction == "CALL")
-        dir_emoji = "⬆️ BUY 🟢" if is_buy else "⬇️ SELL 🔴"
+        dir_emoji = "⬆️ BUY 🟢 (Trend-Following)" if is_buy else "⬇️ SELL 🔴 (Trend-Following)"
         btn_label = "CALL" if is_buy else "PUT"
 
         card_text = (
-            f"👑 **TITAN BALANCED MASTER 👑 M1**\n"
+            f"👑 **TITAN SCENARIO MASTER 👑 M1**\n"
             f"⚡ **[ไม้ {step}]**\n\n"
-            f"💎 **คู่ที่เลือก:** `{label}`\n"
-            f"📈 **Timeframe:** `M1 (Closed Candle)`\n"
+            f"💎 **คู่ที่ดีที่สุดตามเทรนด์:** `{label}`\n"
+            f"📈 **Timeframe:** `M1 + M5 Trend Filter`\n"
             f"⌚ **เข้าออเดอร์เวลา:** `{target_time_str}`\n"
             f"🚀 **ทิศทาง:** **{dir_emoji}**\n\n"
-            f"🛡️ **สถานะ:** `{status}`"
+            f"🛡️ **การสแกนจำลอง:** `{status}`\n"
+            f"⏱️ **Cooldown:** `เปิดใช้งาน (พักคู่เดิม 3 นาที)`"
         )
 
         markup = InlineKeyboardMarkup(row_width=1)
@@ -159,7 +193,7 @@ def handle_start_scan(message):
     active_chat_ids.add(chat_id)
     if chat_id not in user_martingale_step:
         user_martingale_step[chat_id] = 1
-    bot.reply_to(message, "⚡ **TITAN BALANCED BOT ONLINE**\nปรับระบบให้ส่งสัญญาณต่อเนื่องไม่เงียบหายแล้ว! พิมพ์ `/scan` เพื่อทดสอบได้เลย", parse_mode="Markdown")
+    bot.reply_to(message, "⚡ **TITAN SCENARIO ENGINE ONLINE**\nเปิดระบบสแกนจำลองทิศทางอนาคตตามเทรนด์หลักเรียบร้อย!", parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
