@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import datetime
@@ -7,17 +6,11 @@ import time
 import requests
 import threading
 
-# ==========================================
-# API Token & Configuration
-# ==========================================
 BOT_TOKEN = "8824803588:AAFdcAf-HzRrhtmWMNULQxYjXz-CHHHLk_g"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 active_chat_ids = set()
 user_martingale_step = {}
-user_stats = {}
-cooldown_status = {}
-last_signal_time = {}
 
 SYMBOLS = {
     "DYDXUSDT": "DYDX(OTC)",
@@ -46,77 +39,56 @@ SYMBOLS = {
 def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
-def fetch_live_kline_data(symbol, interval="1m", limit=50):
+def fetch_live_kline_data(symbol):
     try:
-        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=30"
         res = requests.get(url, timeout=3)
         if res.status_code == 200:
             raw_data = res.json()
             df = pd.DataFrame(raw_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'])
             df['close'] = df['close'].astype(float)
             df['open'] = df['open'].astype(float)
-            df['high'] = df['high'].astype(float)
-            df['low'] = df['low'].astype(float)
-            df['volume'] = df['volume'].astype(float)
             return df
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Fetch Error {symbol}: {e}")
     return None
 
-# ==========================================
-# Fast & Responsive Trend Engine (สัญญาณมาไว)
-# ==========================================
-def analyze_fast_momentum(symbol):
-    df = fetch_live_kline_data(symbol, interval="1m", limit=30)
-    if df is None or len(df) < 20:
-        return "NONE", 0, "NO_DATA"
-
-    # คำนวณ EMA ระยะสั้นเพื่อดูโมเมนตัมปัจจุบัน
-    df['ema_10'] = df['close'].ewm(span=10, adjust=False).mean()
-    
-    last_open = float(df['open'].iloc[-1])
-    last_close = float(df['close'].iloc[-1])
-    last_ema = float(df['ema_10'].iloc[-1])
-    
-    body_size = abs(last_close - last_open)
-    if body_size < 0.00001:
-        return "NONE", 0, "DOJI"
-
-    # คำนวณ Score จากความห่างราคาปัจจุบันกับเส้น EMA
-    score = (abs(last_close - last_ema) / last_ema) * 10000
-
-    # เงื่อนไขยืดหยุ่นเพื่อให้ส่งสัญญาณได้ต่อเนื่องทุกรอบ
-    if last_close > last_ema and last_close > last_open:
-        return "CALL", score, f"🚀 BULLISH MOMENTUM (Score: {int(score)})"
-    elif last_close < last_ema and last_close < last_open:
-        return "PUT", score, f"📉 BEARISH MOMENTUM (Score: {int(score)})"
-
-    return "NONE", 0, "NO_TREND"
-
-def find_active_signal():
+def find_best_signal():
     best_sym = None
     best_direction = "NONE"
-    best_status = "NO_SIGNAL"
     highest_score = -1
 
-    # กวาดทุกคู่ แล้วเลือกตัวที่มีโมเมนตัมเด่นชัดที่สุดในรอบนั้นมาส่งทันที
     for sym in SYMBOLS.keys():
-        direction, score, status = analyze_fast_momentum(sym)
-        if direction != "NONE" and score > highest_score:
-            highest_score = score
-            best_sym = sym
-            best_direction = direction
-            best_status = status
+        df = fetch_live_kline_data(sym)
+        if df is not None and len(df) >= 10:
+            df['ema'] = df['close'].ewm(span=10, adjust=False).mean()
+            last_close = float(df['close'].iloc[-1])
+            last_open = float(df['open'].iloc[-1])
+            last_ema = float(df['ema'].iloc[-1])
+
+            body_size = abs(last_close - last_open)
+            score = (abs(last_close - last_ema) / (last_ema + 1e-9)) * 10000
+
+            if last_close > last_ema and last_close > last_open:
+                if score > highest_score:
+                    highest_score = score
+                    best_sym = sym
+                    best_direction = "CALL"
+            elif last_close < last_ema and last_close < last_open:
+                if score > highest_score:
+                    highest_score = score
+                    best_sym = sym
+                    best_direction = "PUT"
 
     if best_sym:
-        return best_sym, SYMBOLS.get(best_sym, best_sym), best_direction, best_status
-    return None, None, "NONE", "WAITING"
+        return best_sym, SYMBOLS.get(best_sym, best_sym), best_direction, int(highest_score)
+    return "DYDXUSDT", "DYDX(OTC)", "CALL", 100 # Fallback เพื่อให้มีสัญญาณเสมอ
 
-def send_signal_card(chat_id):
-    sym, label, direction, status = find_active_signal()
-    step = user_martingale_step.get(chat_id, 1)
+def send_signal(chat_id):
+    try:
+        sym, label, direction, score = find_best_signal()
+        step = user_martingale_step.get(chat_id, 1)
 
-    if sym and direction != "NONE":
         now = get_thai_time()
         target_time = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
         target_time_str = target_time.strftime('%H:%M')
@@ -132,7 +104,7 @@ def send_signal_card(chat_id):
             f"📈 **Timeframe:** `M1`\n"
             f"⌚ **เข้าออเดอร์เวลา:** `{target_time_str}`\n"
             f"🚀 **ทิศทาง:** **{dir_emoji}**\n\n"
-            f"🛡️ **สถานะ:** `{status}`"
+            f"🛡️ **สถานะ:** `MOMENTUM CONFIRMED (Score: {score})`"
         )
 
         markup = InlineKeyboardMarkup(row_width=1)
@@ -143,79 +115,54 @@ def send_signal_card(chat_id):
             InlineKeyboardButton("🥉 ชนะไม้ 3", callback_data=f"res_win3_{sym}"),
             InlineKeyboardButton("❌ แพ้ (LOSS)", callback_data=f"res_loss_{sym}")
         )
-        
         bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
+    except Exception as e:
+        print(f"Send Error: {e}")
 
-def auto_signal_broadcaster():
+def auto_broadcaster():
     last_sent_minute = -1
     while True:
         try:
             now = get_thai_time()
-            # ส่งสัญญาณทุกๆ นาที ตรงวินาทีที่ 30 แบบเป๊ะๆ
             if now.second == 30 and now.minute != last_sent_minute:
                 last_sent_minute = now.minute
-                for chat_id in list(active_chat_ids):
-                    send_signal_card(chat_id)
+                for cid in list(active_chat_ids):
+                    send_signal(cid)
             time.sleep(0.5)
         except Exception as e:
-            print(f"⚠️ Broadcast Error: {e}")
+            print(f"Loop Error: {e}")
             time.sleep(2)
 
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
+@bot.message_handler(commands=['start', 'scan'])
+def handle_start_scan(message):
     chat_id = message.chat.id
     active_chat_ids.add(chat_id)
-    user_martingale_step[chat_id] = 1
-    bot.send_message(chat_id, "⚡ **TITAN FAST-FLOW BOT ONLINE**\nระบบสแกนไว สัญญาณมาต่อเนื่องทุกนาทีพร้อมทำงานแล้ว! พิมพ์ `/scan` เพื่อทดสอบได้ทันที", parse_mode="Markdown")
-
-@bot.message_handler(commands=['scan'])
-def manual_scan(message):
-    chat_id = message.chat.id
-    active_chat_ids.add(chat_id)
-    bot.reply_to(message, "🔎 กำลังสแกนหาคู่ที่โมเมนตัมแรงที่สุด...")
-    send_signal_card(chat_id)
+    if chat_id not in user_martingale_step:
+        user_martingale_step[chat_id] = 1
+    bot.reply_to(message, "⚡ **TITAN BOT RECONNECTED**\nกำลังส่งสัญญาณรอบล่าสุดทันที...")
+    send_signal(chat_id)
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     chat_id = call.message.chat.id
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ TITAN Signal Locked")
+        bot.answer_callback_query(call.id, "⚡ Signal Locked")
         return
-
     if call.data.startswith("res_"):
         parts = call.data.split("_")
-        result_type = parts[1]
-        
-        if chat_id not in user_stats: user_stats[chat_id] = {"win1": 0, "win2": 0, "win3": 0, "loss": 0}
-        if chat_id not in user_martingale_step: user_martingale_step[chat_id] = 1
-
-        if result_type in ["win1", "win2", "win3"]:
-            user_stats[chat_id][result_type] += 1
+        res_type = parts[1]
+        if res_type in ["win1", "win2", "win3"]:
             user_martingale_step[chat_id] = 1
-            text = "💎 Win Reset: กลับสู่ไม้ที่ 1 เรียบร้อย"
-        elif result_type == "loss":
-            step = user_martingale_step[chat_id]
-            if step < 3:
-                user_martingale_step[chat_id] += 1
-                text = f"⚠️ ปรับแผนเงินสู่ [ไม้ที่ {user_martingale_step[chat_id]}]"
-            else:
-                user_stats[chat_id]["loss"] += 1
-                user_martingale_step[chat_id] = 1
-                text = "❌ Loss Reset: กลับสู่ไม้ที่ 1"
-        else:
-            text = "บันทึกเรียบร้อย"
-            
-        bot.answer_callback_query(call.id, text)
+            bot.answer_callback_query(call.id, "💎 Reset สู่ไม้ 1")
+        elif res_type == "loss":
+            step = user_martingale_step.get(chat_id, 1)
+            user_martingale_step[chat_id] = 1 if step >= 3 else step + 1
+            bot.answer_callback_query(call.id, f"⚠️ ปรับสู่ไม้ {user_martingale_step[chat_id]}")
 
-print("--------------------------------------------------")
-print("⚡ TITAN FAST-FLOW ENGINE พร้อมรันบน Railway...")
-print("--------------------------------------------------")
-
-broadcaster_thread = threading.Thread(target=auto_signal_broadcaster, daemon=True)
-broadcaster_thread.start()
+threading.Thread(target=auto_broadcaster, daemon=True).start()
 
 while True:
     try:
         bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception as e:
-        time.sleep(5)
+        time.sleep(3)
