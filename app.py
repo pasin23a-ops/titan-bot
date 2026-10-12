@@ -12,14 +12,14 @@ bot = telebot.TeleBot(BOT_TOKEN)
 active_chat_ids = set()
 user_martingale_step = {}
 last_global_signal_time = 0 
-symbol_cooldown = {}
 
+# Cache สำหรับเก็บคู่ที่ "มั่นใจที่สุด" ณ เวลานั้น (ไม่มีการแบนคู่เดิม)
 best_candidate_cache = {
     "symbol": "DYDXUSDT",
     "label": "DYDX(OTC)",
     "direction": "CALL",
     "status": "INITIALIZING",
-    "score": 0
+    "score": -99999
 }
 
 SYMBOLS = {
@@ -66,10 +66,10 @@ def fetch_kline(symbol, interval="1m", limit=40):
         pass
     return None
 
-def smart_balanced_analyze(symbol):
+def analyze_highest_confidence(symbol):
     df = fetch_kline(symbol, "1m", 40)
     if df is None or len(df) < 30:
-        return "CALL", 50, "DEFAULT_SAFE"
+        return "CALL", -99999, "DATA_INSUFFICIENT"
 
     df['ema_10'] = df['close'].ewm(span=10, adjust=False).mean()
     df['ema_20'] = df['close'].ewm(span=20, adjust=False).mean()
@@ -81,53 +81,50 @@ def smart_balanced_analyze(symbol):
     
     ema10 = float(df['ema_10'].iloc[-2])
     ema20 = float(df['ema_20'].iloc[-2])
-
-    # ตรวจสอบแนวรับ-แนวต้านแบบยืดหยุ่น (เตือนเฉยๆ แต่ไม่บล็อกจนขาดสัญญาณ)
-    recent_high = df['high'].iloc[-20:-2].max()
-    recent_low = df['low'].iloc[-20:-2].min()
     
+    vol = float(df['volume'].iloc[-2])
+    avg_vol = df['volume'].iloc[-12:-2].mean()
+
+    # ตรวจสอบแนวต้าน/แนวรับย้อนหลังเพื่อหลีกเลี่ยงจุดอันตราย
+    recent_high = df['high'].iloc[-25:-2].max()
+    recent_low = df['low'].iloc[-25:-2].min()
+
     score = int((abs(c - ema20) / (ema20 + 1e-9)) * 10000)
 
-    # เช็กทิศทางตาม EMA และราคาปิด
+    # เช็กทิศทางและให้คะแนนความมั่นใจ
     if c >= ema10 and c >= ema20:
-        # ถ้าใกล้แนวต้าน ให้ลดคะแนนลงนิดหน่อยแต่ยังให้ไปต่อได้ถ้าแรงส่งดี
-        penalty = 200 if abs(c - recent_high) / (recent_high + 1e-9) < 0.01 else 0
-        final_score = score + 500 - penalty
-        return "CALL", final_score, f"TREND UP (Score: {final_score})"
+        # หากใกล้แนวต้านมากๆ หักคะแนนความมั่นใจลง
+        if abs(c - recent_high) / (recent_high + 1e-9) < 0.005:
+            score -= 500  
+        if vol > avg_vol:
+            score += 300
+        return "CALL", score + 1000, f"MAX CONFIDENCE UPTREND (Score: {score + 1000})"
     else:
-        penalty = 200 if abs(c - recent_low) / (recent_low + 1e-9) < 0.01 else 0
-        final_score = score + 500 - penalty
-        return "PUT", final_score, f"TREND DOWN (Score: {final_score})"
+        # หากใกล้แนวรับมากๆ หักคะแนนความมั่นใจลง
+        if abs(c - recent_low) / (recent_low + 1e-9) < 0.005:
+            score -= 500
+        if vol > avg_vol:
+            score += 300
+        return "PUT", score + 1000, f"MAX CONFIDENCE DOWNTREND (Score: {score + 1000})"
 
 def background_deep_scanner():
+    """สแกนทุกคู่ตลอดเวลาแบบอิสระ ไม่มีการบล็อกคู่เงินซ้ำ"""
     global best_candidate_cache
     while True:
         try:
-            now_t = time.time()
-            expired_syms = [s for s, t in symbol_cooldown.items() if now_t - t > 120]
-            for s in expired_syms:
-                del symbol_cooldown[s]
-
             top_sym = None
             top_dir = "NONE"
             top_status = "SCANNING"
-            highest_score = -99999
+            highest_score = -999999
 
+            # เช็กครบทุกคู่โดยไม่มีเงื่อนไขคูลดาวน์รายคู่ เลือกตัวที่คะแนนสูงสุดจริงๆ
             for sym in SYMBOLS.keys():
-                if sym in symbol_cooldown:
-                    continue
-
-                direction, score, status = smart_balanced_analyze(sym)
+                direction, score, status = analyze_highest_confidence(sym)
                 if score > highest_score:
                     highest_score = score
                     top_sym = sym
                     top_dir = direction
                     top_status = status
-
-            # บังคับเลือกคู่ที่ดีที่สุดเสมอ ไม่ให้เป็นค่าว่าง
-            if not top_sym:
-                top_sym = list(SYMBOLS.keys())[0]
-                top_dir, highest_score, top_status = smart_balanced_analyze(top_sym)
 
             if top_sym:
                 best_candidate_cache = {
@@ -146,15 +143,17 @@ def send_signal(chat_id):
     global last_global_signal_time
     try:
         now_time = time.time()
+        
+        # คูลดาวน์ภาพรวมสัญญาณ 1 แท่งเทียน (65 วินาที)
         if now_time - last_global_signal_time < 65:
             return
 
+        # ดึงคู่ที่มั่นใจที่สุด ณ ปัจจุบันทันที (ไม่สนว่าจะเพิ่งส่งคู่ไหนไปก่อนหน้า)
         sym = best_candidate_cache["symbol"]
         label = best_candidate_cache["label"]
         direction = best_candidate_cache["direction"]
         status = best_candidate_cache["status"]
 
-        symbol_cooldown[sym] = now_time
         last_global_signal_time = now_time
 
         step = user_martingale_step.get(chat_id, 1)
@@ -163,18 +162,18 @@ def send_signal(chat_id):
         target_time_str = target_time.strftime('%H:%M')
 
         is_buy = (direction == "CALL")
-        dir_emoji = "⬆️ BUY 🟢 (Optimized Trend)" if is_buy else "⬇️ SELL 🔴 (Optimized Trend)"
+        dir_emoji = "⬆️ BUY 🟢 (Absolute Best Pick)" if is_buy else "⬇️ SELL 🔴 (Absolute Best Pick)"
         btn_label = "CALL" if is_buy else "PUT"
 
         card_text = (
-            f"👑 **TITAN CONTINUOUS MASTER 👑 M1**\n"
+            f"👑 **TITAN ABSOLUTE-BEST MASTER 👑 M1**\n"
             f"⚡ **[ไม้ {step}]**\n\n"
-            f"🔥 **คู่ที่ดีที่สุดรอบนี้:** `{label}`\n"
-            f"📈 **Timeframe:** `M1 (Balanced Filter + Force Emit)`\n"
+            f"🔥 **คู่ที่มั่นใจที่สุดในรอบนี้:** `{label}`\n"
+            f"📈 **Timeframe:** `M1 (Absolute Highest Score)`\n"
             f"⌚ **เข้าออเดอร์เวลา:** `{target_time_str}`\n"
             f"🚀 **ทิศทาง:** **{dir_emoji}**\n\n"
             f"🛡️ **สถานะ:** `{status}`\n"
-            f"⏱️ **Cooldown:** `พักคู่เดิม 2 นาที / ส่งต่อเนื่องทุกนาที`"
+            f"⏱️ **Cooldown:** `พักระบบสัญญาณภาพรวม 1 แท่งเทียน (ไม่จำกัดคู่เงิน)`"
         )
 
         markup = InlineKeyboardMarkup(row_width=1)
@@ -209,7 +208,7 @@ def handle_start_scan(message):
     active_chat_ids.add(chat_id)
     if chat_id not in user_martingale_step:
         user_martingale_step[chat_id] = 1
-    bot.reply_to(message, "⚡ **TITAN CONTINUOUS MODE ONLINE**\nเปิดระบบส่งสัญญาณต่อเนื่องทุกรอบนาที พร้อมกรองความเสี่ยงเรียบร้อย!", parse_mode="Markdown")
+    bot.reply_to(message, "⚡ **TITAN ABSOLUTE MODE ONLINE**\nเปิดระบบเลือกคู่ที่มั่นใจที่สุดตลอดเวลา (ไม่มีคูลดาวน์รายคู่) เรียบร้อย!", parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
