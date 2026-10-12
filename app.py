@@ -46,7 +46,7 @@ SYMBOLS = {
 def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
-def fetch_live_kline_data(symbol, interval="1m", limit=100):
+def fetch_live_kline_data(symbol, interval="1m", limit=50):
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
         res = requests.get(url, timeout=3)
@@ -61,85 +61,59 @@ def fetch_live_kline_data(symbol, interval="1m", limit=100):
             return df
     except Exception:
         pass
-    
-    size = limit
-    df = pd.DataFrame()
-    np.random.seed(int(time.time() * 1000) % 1000000 + sum(ord(c) for c in symbol))
-    prices = np.cumsum(np.random.randn(size)) + 100
-    df['close'] = prices
-    df['open'] = df['close'].shift(1).fillna(100.0)
-    df['high'] = df[['open', 'close']].max(axis=1) + 0.1
-    df['low'] = df[['open', 'close']].min(axis=1) - 0.1
-    df['volume'] = np.random.rand(size) * 1000
-    return df
+    return None
 
 # ==========================================
-# Advanced Scoring & Multi-Timeframe Engine
+# Fast & Responsive Trend Engine (สัญญาณมาไว)
 # ==========================================
-def analyze_and_score(symbol):
-    df_m1 = fetch_live_kline_data(symbol, interval="1m", limit=60)
-    df_m5 = fetch_live_kline_data(symbol, interval="5m", limit=30)
+def analyze_fast_momentum(symbol):
+    df = fetch_live_kline_data(symbol, interval="1m", limit=30)
+    if df is None or len(df) < 20:
+        return "NONE", 0, "NO_DATA"
 
-    if df_m1 is None or len(df_m1) < 20 or df_m5 is None or len(df_m5) < 10:
-        return "NONE", 0, "DATA_INSUFFICIENT"
-
-    # คำนวณเทรนด์ M5
-    df_m5['ema_20'] = df_m5['close'].ewm(span=20, adjust=False).mean()
-    m5_close = float(df_m5['close'].iloc[-1])
-    m5_ema20 = float(df_m5['ema_20'].iloc[-1])
+    # คำนวณ EMA ระยะสั้นเพื่อดูโมเมนตัมปัจจุบัน
+    df['ema_10'] = df['close'].ewm(span=10, adjust=False).mean()
     
-    is_m5_uptrend = m5_close > m5_ema20
-    is_m5_downtrend = m5_close < m5_ema20
+    last_open = float(df['open'].iloc[-1])
+    last_close = float(df['close'].iloc[-1])
+    last_ema = float(df['ema_10'].iloc[-1])
+    
+    body_size = abs(last_close - last_open)
+    if body_size < 0.00001:
+        return "NONE", 0, "DOJI"
 
-    # คำนวณ M1
-    df_m1['ema_50'] = df_m1['close'].ewm(span=50, adjust=False).mean()
-    m1_close = float(df_m1['close'].iloc[-1])
-    m1_open = float(df_m1['open'].iloc[-1])
-    m1_ema50 = float(df_m1['ema_50'].iloc[-1])
+    # คำนวณ Score จากความห่างราคาปัจจุบันกับเส้น EMA
+    score = (abs(last_close - last_ema) / last_ema) * 10000
 
-    is_m1_green = m1_close > m1_open
-    is_m1_red = m1_close < m1_open
-
-    body_size = abs(m1_close - m1_open)
-    if body_size < 0.0001:
-        return "NONE", 0, "NOISY"
-
-    # คำนวณ Score ความห่างของราคาจากเส้น EMA (ยิ่งห่างและแท่งเทียนชัด คะแนนความมั่นใจยิ่งสูง)
-    score = abs(m1_close - m1_ema50) * 100 + body_size * 10
-
-    if is_m5_uptrend and m1_close > m1_ema50 and is_m1_green:
-        return "CALL", score, "🔥 TOP UPTREND CONFIRMED"
-    elif is_m5_downtrend and m1_close < m1_ema50 and is_m1_red:
-        return "PUT", score, "📉 TOP DOWNTREND CONFIRMED"
+    # เงื่อนไขยืดหยุ่นเพื่อให้ส่งสัญญาณได้ต่อเนื่องทุกรอบ
+    if last_close > last_ema and last_close > last_open:
+        return "CALL", score, f"🚀 BULLISH MOMENTUM (Score: {int(score)})"
+    elif last_close < last_ema and last_close < last_open:
+        return "PUT", score, f"📉 BEARISH MOMENTUM (Score: {int(score)})"
 
     return "NONE", 0, "NO_TREND"
 
-def find_most_confident_signal():
+def find_active_signal():
     best_sym = None
     best_direction = "NONE"
     best_status = "NO_SIGNAL"
     highest_score = -1
 
-    # สแกนทุกคู่ในตลาด แล้วหาคู่ที่ Score สูงสุด (มั่นใจที่สุด)
+    # กวาดทุกคู่ แล้วเลือกตัวที่มีโมเมนตัมเด่นชัดที่สุดในรอบนั้นมาส่งทันที
     for sym in SYMBOLS.keys():
-        direction, score, status = analyze_and_score(sym)
+        direction, score, status = analyze_fast_momentum(sym)
         if direction != "NONE" and score > highest_score:
             highest_score = score
             best_sym = sym
             best_direction = direction
-            best_status = f"{status} (Score: {int(score)})"
+            best_status = status
 
     if best_sym:
         return best_sym, SYMBOLS.get(best_sym, best_sym), best_direction, best_status
-    return None, None, "NONE", "NO_SIGNAL"
+    return None, None, "NONE", "WAITING"
 
 def send_signal_card(chat_id):
-    current_state = cooldown_status.get(chat_id, "READY")
-    if current_state == "WAITING_COOLDOWN":
-        cooldown_status[chat_id] = "READY"
-        return
-
-    sym, label, direction, status = find_most_confident_signal()
+    sym, label, direction, status = find_active_signal()
     step = user_martingale_step.get(chat_id, 1)
 
     if sym and direction != "NONE":
@@ -148,18 +122,17 @@ def send_signal_card(chat_id):
         target_time_str = target_time.strftime('%H:%M')
 
         is_buy = (direction == "CALL")
-        dir_emoji = "⬆️ BUY 🟢 (มั่นใจสูงสุด)" if is_buy else "⬇️ SELL 🔴 (มั่นใจสูงสุด)"
+        dir_emoji = "⬆️ BUY 🟢" if is_buy else "⬇️ SELL 🔴"
         btn_label = "CALL" if is_buy else "PUT"
 
         card_text = (
-            f"⚡ **TITAN TOP-PICK MASTER 👑 M1**\n"
+            f"⚡ **TITAN FAST-FLOW MASTER 👑 M1**\n"
             f"⚡ **[ไม้ {step}]**\n\n"
-            f"💎 **คัดคู่ที่ดีที่สุด:** `{label}`\n"
+            f"💎 **คู่ที่เลือก:** `{label}`\n"
             f"📈 **Timeframe:** `M1`\n"
-            f"⌚ **กดออเดอร์เวลา:** `{target_time_str}`\n"
+            f"⌚ **เข้าออเดอร์เวลา:** `{target_time_str}`\n"
             f"🚀 **ทิศทาง:** **{dir_emoji}**\n\n"
-            f"🛡️ **สถานะ:** `{status}`\n"
-            f"⏱️ **Cooldown:** `เปิดใช้งานรอบ่อทพัก 1 แท่ง`"
+            f"🛡️ **สถานะ:** `{status}`"
         )
 
         markup = InlineKeyboardMarkup(row_width=1)
@@ -172,14 +145,13 @@ def send_signal_card(chat_id):
         )
         
         bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
-        cooldown_status[chat_id] = "WAITING_COOLDOWN"
-        last_signal_time[chat_id] = now
 
 def auto_signal_broadcaster():
     last_sent_minute = -1
     while True:
         try:
             now = get_thai_time()
+            # ส่งสัญญาณทุกๆ นาที ตรงวินาทีที่ 30 แบบเป๊ะๆ
             if now.second == 30 and now.minute != last_sent_minute:
                 last_sent_minute = now.minute
                 for chat_id in list(active_chat_ids):
@@ -194,14 +166,13 @@ def send_welcome(message):
     chat_id = message.chat.id
     active_chat_ids.add(chat_id)
     user_martingale_step[chat_id] = 1
-    cooldown_status[chat_id] = "READY"
-    bot.send_message(chat_id, "⚡ **TITAN TOP-PICK BOT ONLINE**\nระบบสแกนหากราฟที่มั่นใจที่สุดพร้อมทำงานแล้ว พิมพ์ `/scan` เพื่อทดสอบได้เลย!", parse_mode="Markdown")
+    bot.send_message(chat_id, "⚡ **TITAN FAST-FLOW BOT ONLINE**\nระบบสแกนไว สัญญาณมาต่อเนื่องทุกนาทีพร้อมทำงานแล้ว! พิมพ์ `/scan` เพื่อทดสอบได้ทันที", parse_mode="Markdown")
 
 @bot.message_handler(commands=['scan'])
 def manual_scan(message):
     chat_id = message.chat.id
     active_chat_ids.add(chat_id)
-    bot.reply_to(message, "🔎 กำลังสแกนทุกคู่เงินเพื่อหาตัวที่มั่นใจที่สุด...")
+    bot.reply_to(message, "🔎 กำลังสแกนหาคู่ที่โมเมนตัมแรงที่สุด...")
     send_signal_card(chat_id)
 
 @bot.callback_query_handler(func=lambda call: True)
@@ -237,7 +208,7 @@ def handle_callbacks(call):
         bot.answer_callback_query(call.id, text)
 
 print("--------------------------------------------------")
-print("⚡ TITAN TOP-PICK ENGINE พร้อมรันบน Railway...")
+print("⚡ TITAN FAST-FLOW ENGINE พร้อมรันบน Railway...")
 print("--------------------------------------------------")
 
 broadcaster_thread = threading.Thread(target=auto_signal_broadcaster, daemon=True)
@@ -248,4 +219,3 @@ while True:
         bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception as e:
         time.sleep(5)
-        
