@@ -59,7 +59,7 @@ def fetch_kline(symbol, interval="1m", limit=30):
 def analyze_symbol(symbol):
     df = fetch_kline(symbol, "1m", 30)
     if df is None or len(df) < 20:
-        return "CALL", 50, "NEUTRAL"
+        return "CALL", 40, "NEUTRAL"
 
     df['ema_10'] = df['close'].ewm(span=10, adjust=False).mean()
     df['ema_20'] = df['close'].ewm(span=20, adjust=False).mean()
@@ -68,34 +68,32 @@ def analyze_symbol(symbol):
     o = float(df['open'].iloc[-2])
     ema10 = float(df['ema_10'].iloc[-2])
     ema20 = float(df['ema_20'].iloc[-2])
-    
-    # คำนวณความห่างจากเส้น EMA เพื่อหาแรงส่งของเทรนด์
-    distance = abs(c - ema20) / (ema20 + 1e-9)
-    raw_score = int(distance * 1000000)
+    vol = float(df['volume'].iloc[-2])
+    avg_vol = df['volume'].iloc[-12:-2].mean()
 
-    if c >= ema20:
-        score = min(max(75 + raw_score, 78), 98)
-        return "CALL", score, "UPTREND MOMENTUM"
+    score = 50
+    # เช็กโครงสร้างเทรนด์ตามเงื่อนไขที่แท้จริง
+    if c > ema10 and ema10 > ema20 and c > o:
+        score = 80
+        if vol > avg_vol:
+            score = 92
+        return "CALL", score, "STRONG UPTREND"
+    elif c < ema10 and ema10 < ema20 and c < o:
+        score = 80
+        if vol > avg_vol:
+            score = 92
+        return "PUT", score, "STRONG DOWNTREND"
     else:
-        score = min(max(75 + raw_score, 78), 98)
-        return "PUT", score, "DOWNTREND MOMENTUM"
+        # ถ้าไม่อยู่ในเทรนด์ชัดเจน ให้คะแนนต่ำกว่า 70% จะได้แสดงเป็นสีแดง
+        direction = "CALL" if c >= ema20 else "PUT"
+        return direction, 55, "WEAK / SIDEWAY"
 
 def build_market_menu():
-    # คำนวณคะแนนทุกคู่ก่อน เพื่อหาค่าเฉลี่ยและดันตัวท็อปให้เป็นสีเขียวอย่างน้อยครึ่งหนึ่ง
-    scores = {}
-    for sym in SYMBOLS.keys():
-        _, score, _ = analyze_symbol(sym)
-        scores[sym] = score
-
-    # หาค่ากลาง (Median) เพื่อใช้ตัดเกรดสีเขียว/แดงอย่างสมดุล
-    sorted_scores = sorted(scores.values())
-    median_score = sorted_scores[len(sorted_scores) // 2]
-
     markup = InlineKeyboardMarkup(row_width=2)
     for sym, label in SYMBOLS.items():
-        score = scores[sym]
-        # คู่ไหนคะแนนมากกว่าหรือเท่ากับค่ากลางในรอบนั้น จะถูกตีเป็นสีเขียว (มั่นใจสูง)
-        dot = "🟢" if score >= median_score else "🔴"
+        _, score, _ = analyze_symbol(sym)
+        # 🟢 เขียวเฉพาะเมื่อคะแนน >= 70% เท่านั้น / ต่ำกว่านั้น 🔴 แดง
+        dot = "🟢" if score >= 70 else "🔴"
         btn_text = f"{dot} {label} ({score}%)"
         markup.add(InlineKeyboardButton(btn_text, callback_data=f"select_{sym}"))
     return markup
@@ -118,7 +116,7 @@ def send_signal_for_symbol(chat_id, sym):
             f"👑 **TITAN MANUAL SELECTOR 👑 M1**\n"
             f"⚡ **[ไม้ {step}]**\n\n"
             f"🎯 **คู่ที่คุณเลือก:** `{label}`\n"
-            f"📈 **Timeframe:** `M1 (Balanced Analysis)`\n"
+            f"📈 **Timeframe:** `M1 (Threshold Filter)`\n"
             f"⌚ **เข้าออเดอร์เวลา:** `{target_time_str}`\n"
             f"🚀 **ทิศทาง:** **{dir_emoji}**\n\n"
             f"🛡️ **สถานะความมั่นใจ:** `{status} (Score: {score}%)`"
@@ -146,10 +144,10 @@ def handle_menu(message):
     menu_markup = build_market_menu()
     sent_msg = bot.reply_to(
         message, 
-        "⚡ **TITAN LIVE MARKET RADAR (BALANCED)** ⚡\n"
-        "สถานะสีอัปเดตอัตโนมัติทุกแท่งเทียน M1:\n"
-        "🟢 = คู่ที่ทรงสวยและโมเมนตัมดีที่สุดในรอบนี้\n"
-        "🔴 = คู่ที่แรงส่งยังไม่เด่น\n\n"
+        "⚡ **TITAN LIVE MARKET RADAR (70% THRESHOLD)** ⚡\n"
+        "เกณฑ์การแสดงผลสี:\n"
+        "🟢 = มั่นใจ (Score $\ge$ 70%)\n"
+        "🔴 = ไม่มั่นใจ / ไซด์เวย์ (Score < 70%)\n\n"
         "กดเลือกคู่ที่ต้องการเทรดด้านล่างได้เลยครับ:", 
         reply_markup=menu_markup, 
         parse_mode="Markdown"
@@ -171,7 +169,7 @@ def auto_menu_refresher():
                                 chat_id=cid,
                                 message_id=active_menu_messages[cid],
                                 text=(
-                                    "⚡ **TITAN LIVE MARKET RADAR (BALANCED)** ⚡\n"
+                                    "⚡ **TITAN LIVE MARKET RADAR (70% THRESHOLD)** ⚡\n"
                                     f"🔄 *อัปเดตสดล่าสุดรอบเวลา {now.strftime('%H:%M:%S')}*\n\n"
                                     "กดเลือกคู่ที่ต้องการเทรดด้านล่างได้เลยครับ:"
                                 ),
