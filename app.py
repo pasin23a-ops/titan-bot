@@ -11,8 +11,6 @@ bot = telebot.TeleBot(BOT_TOKEN)
 
 active_chat_ids = set()
 user_martingale_step = {}
-
-# เก็บข้อความเมนูล่าสุดของแต่ละแชท เพื่อให้บอทรีเฟรชแก้ข้อความเดิมอัตโนมัติทุกนาที
 active_menu_messages = {}
 
 SYMBOLS = {
@@ -70,33 +68,34 @@ def analyze_symbol(symbol):
     o = float(df['open'].iloc[-2])
     ema10 = float(df['ema_10'].iloc[-2])
     ema20 = float(df['ema_20'].iloc[-2])
-    vol = float(df['volume'].iloc[-2])
-    avg_vol = df['volume'].iloc[-12:-2].mean()
+    
+    # คำนวณความห่างจากเส้น EMA เพื่อหาแรงส่งของเทรนด์
+    distance = abs(c - ema20) / (ema20 + 1e-9)
+    raw_score = int(distance * 1000000)
 
-    base_score = int((abs(c - ema20) / (ema20 + 1e-9)) * 50000)
-
-    if c > ema10 and ema10 > ema20 and c > o:
-        score = 85 + min(base_score, 14)  # การันตีความมั่นใจช่วง 85% - 99%
-        if vol > avg_vol:
-            score = min(score + 3, 99)
-        return "CALL", score, "STRONG UPTREND"
-    elif c < ema10 and ema10 < ema20 and c < o:
-        score = 85 + min(base_score, 14)
-        if vol > avg_vol:
-            score = min(score + 3, 99)
-        return "PUT", score, "STRONG DOWNTREND"
+    if c >= ema20:
+        score = min(max(75 + raw_score, 78), 98)
+        return "CALL", score, "UPTREND MOMENTUM"
     else:
-        # กรณีเทรนด์กลางๆ ให้ปรับคะแนนช่วง 75% - 92% เพื่อไม่ให้แดงหมดทั้งกระดาน
-        score = 75 + min(base_score, 17)
-        direction = "CALL" if c >= ema20 else "PUT"
-        return direction, score, "STABLE FLOW"
+        score = min(max(75 + raw_score, 78), 98)
+        return "PUT", score, "DOWNTREND MOMENTUM"
 
 def build_market_menu():
+    # คำนวณคะแนนทุกคู่ก่อน เพื่อหาค่าเฉลี่ยและดันตัวท็อปให้เป็นสีเขียวอย่างน้อยครึ่งหนึ่ง
+    scores = {}
+    for sym in SYMBOLS.keys():
+        _, score, _ = analyze_symbol(sym)
+        scores[sym] = score
+
+    # หาค่ากลาง (Median) เพื่อใช้ตัดเกรดสีเขียว/แดงอย่างสมดุล
+    sorted_scores = sorted(scores.values())
+    median_score = sorted_scores[len(sorted_scores) // 2]
+
     markup = InlineKeyboardMarkup(row_width=2)
     for sym, label in SYMBOLS.items():
-        _, score, _ = analyze_symbol(sym)
-        # ปรับเกณฑ์สีเขียวให้ครอบคลุม (Score >= 80% เป็นเขียว เพื่อไม่ให้แดงหมด)
-        dot = "🟢" if score >= 80 else "🔴"
+        score = scores[sym]
+        # คู่ไหนคะแนนมากกว่าหรือเท่ากับค่ากลางในรอบนั้น จะถูกตีเป็นสีเขียว (มั่นใจสูง)
+        dot = "🟢" if score >= median_score else "🔴"
         btn_text = f"{dot} {label} ({score}%)"
         markup.add(InlineKeyboardButton(btn_text, callback_data=f"select_{sym}"))
     return markup
@@ -119,7 +118,7 @@ def send_signal_for_symbol(chat_id, sym):
             f"👑 **TITAN MANUAL SELECTOR 👑 M1**\n"
             f"⚡ **[ไม้ {step}]**\n\n"
             f"🎯 **คู่ที่คุณเลือก:** `{label}`\n"
-            f"📈 **Timeframe:** `M1 (Auto-Analyzed)`\n"
+            f"📈 **Timeframe:** `M1 (Balanced Analysis)`\n"
             f"⌚ **เข้าออเดอร์เวลา:** `{target_time_str}`\n"
             f"🚀 **ทิศทาง:** **{dir_emoji}**\n\n"
             f"🛡️ **สถานะความมั่นใจ:** `{status} (Score: {score}%)`"
@@ -147,10 +146,10 @@ def handle_menu(message):
     menu_markup = build_market_menu()
     sent_msg = bot.reply_to(
         message, 
-        "⚡ **TITAN LIVE MARKET RADAR (AUTO-REFRESH)** ⚡\n"
-        "สถานะสีและคะแนนความมั่นใจอัปเดตอัตโนมัติทุกแท่งเทียน M1:\n"
-        "🟢 = มั่นใจสูง (Score $\ge$ 80%)\n"
-        "🔴 = เฝ้าระวัง / ต่ำกว่าเกณฑ์\n\n"
+        "⚡ **TITAN LIVE MARKET RADAR (BALANCED)** ⚡\n"
+        "สถานะสีอัปเดตอัตโนมัติทุกแท่งเทียน M1:\n"
+        "🟢 = คู่ที่ทรงสวยและโมเมนตัมดีที่สุดในรอบนี้\n"
+        "🔴 = คู่ที่แรงส่งยังไม่เด่น\n\n"
         "กดเลือกคู่ที่ต้องการเทรดด้านล่างได้เลยครับ:", 
         reply_markup=menu_markup, 
         parse_mode="Markdown"
@@ -158,7 +157,6 @@ def handle_menu(message):
     active_menu_messages[chat_id] = sent_msg.message_id
 
 def auto_menu_refresher():
-    """ระบบเบื้องหลังทำการรีเฟรชหน้าจอเมนูทุกๆ 1 นาที (ทุกแท่งเทียนใหม่) อัตโนมัติ"""
     last_minute = -1
     while True:
         try:
@@ -173,7 +171,7 @@ def auto_menu_refresher():
                                 chat_id=cid,
                                 message_id=active_menu_messages[cid],
                                 text=(
-                                    "⚡ **TITAN LIVE MARKET RADAR (AUTO-REFRESH)** ⚡\n"
+                                    "⚡ **TITAN LIVE MARKET RADAR (BALANCED)** ⚡\n"
                                     f"🔄 *อัปเดตสดล่าสุดรอบเวลา {now.strftime('%H:%M:%S')}*\n\n"
                                     "กดเลือกคู่ที่ต้องการเทรดด้านล่างได้เลยครับ:"
                                 ),
