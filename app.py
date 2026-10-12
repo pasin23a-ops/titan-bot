@@ -13,11 +13,10 @@ active_chat_ids = set()
 user_martingale_step = {}
 last_global_signal_time = 0 
 
-# Cache สำหรับเก็บคู่ที่ "มั่นใจที่สุด" ณ เวลานั้น (ไม่มีการแบนคู่เดิม)
 best_candidate_cache = {
     "symbol": "DYDXUSDT",
     "label": "DYDX(OTC)",
-    "direction": "CALL",
+    "direction": "NONE",
     "status": "INITIALIZING",
     "score": -99999
 }
@@ -49,7 +48,7 @@ SYMBOLS = {
 def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
-def fetch_kline(symbol, interval="1m", limit=40):
+def fetch_kline(symbol, interval="1m", limit=35):
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
         res = requests.get(url, timeout=3)
@@ -66,49 +65,45 @@ def fetch_kline(symbol, interval="1m", limit=40):
         pass
     return None
 
-def analyze_highest_confidence(symbol):
-    df = fetch_kline(symbol, "1m", 40)
-    if df is None or len(df) < 30:
-        return "CALL", -99999, "DATA_INSUFFICIENT"
+def analyze_strict_trend(symbol):
+    df = fetch_kline(symbol, "1m", 35)
+    
+    # ถ้าดึงข้อมูลไม่ได้ หรือไม่ครบ ให้คืนค่า NONE เพื่อไม่ส่งสัญญาณมั่ว
+    if df is None or len(df) < 25:
+        return "NONE", -99999, "DATA_ERROR"
 
     df['ema_10'] = df['close'].ewm(span=10, adjust=False).mean()
     df['ema_20'] = df['close'].ewm(span=20, adjust=False).mean()
 
-    o = float(df['open'].iloc[-2])
     c = float(df['close'].iloc[-2])
-    h = float(df['high'].iloc[-2])
-    l = float(df['low'].iloc[-2])
-    
+    o = float(df['open'].iloc[-2])
     ema10 = float(df['ema_10'].iloc[-2])
     ema20 = float(df['ema_20'].iloc[-2])
+
+    # เช็กความแรงของเทรนด์
+    trend_power = int((abs(c - ema20) / (ema20 + 1e-9)) * 10000)
+
+    # --- เงื่อนไขตามเทรนด์แบบเด็ดขาด (STRICT TREND FOLLOWING) ---
     
-    vol = float(df['volume'].iloc[-2])
-    avg_vol = df['volume'].iloc[-12:-2].mean()
+    # 1. ขาขึ้นเด็ดขาด: ราคาปิด > EMA10 > EMA20 และแท่งเทียนเป็นสีเขียว
+    if c > ema10 and ema10 > ema20 and c > o:
+        score = 1000 + trend_power
+        return "CALL", score, f"STRICT UPTREND (Score: {score})"
 
-    # ตรวจสอบแนวต้าน/แนวรับย้อนหลังเพื่อหลีกเลี่ยงจุดอันตราย
-    recent_high = df['high'].iloc[-25:-2].max()
-    recent_low = df['low'].iloc[-25:-2].min()
+    # 2. ขาลงเด็ดขาด: ราคาปิด < EMA10 < EMA20 และแท่งเทียนเป็นสีแดง
+    elif c < ema10 and ema10 < ema20 and c < o:
+        score = 1000 + trend_power
+        return "PUT", score, f"STRICT DOWNTREND (Score: {score})"
 
-    score = int((abs(c - ema20) / (ema20 + 1e-9)) * 10000)
-
-    # เช็กทิศทางและให้คะแนนความมั่นใจ
-    if c >= ema10 and c >= ema20:
-        # หากใกล้แนวต้านมากๆ หักคะแนนความมั่นใจลง
-        if abs(c - recent_high) / (recent_high + 1e-9) < 0.005:
-            score -= 500  
-        if vol > avg_vol:
-            score += 300
-        return "CALL", score + 1000, f"MAX CONFIDENCE UPTREND (Score: {score + 1000})"
+    # 3. ถ้าไม่อยู่ในเงื่อนไขเทรนด์ที่ชัดเจน (เช่น กราฟสลับสี หรือ EMA พันกัน)
+    # คืนค่าตามฝั่ง EMA หลักเท่านั้น ไม่ให้สวนเด็ดขาด
+    if c >= ema20:
+        return "CALL", trend_power, f"WEAK UPTREND (Score: {trend_power})"
     else:
-        # หากใกล้แนวรับมากๆ หักคะแนนความมั่นใจลง
-        if abs(c - recent_low) / (recent_low + 1e-9) < 0.005:
-            score -= 500
-        if vol > avg_vol:
-            score += 300
-        return "PUT", score + 1000, f"MAX CONFIDENCE DOWNTREND (Score: {score + 1000})"
+        return "PUT", trend_power, f"WEAK DOWNTREND (Score: {trend_power})"
 
 def background_deep_scanner():
-    """สแกนทุกคู่ตลอดเวลาแบบอิสระ ไม่มีการบล็อกคู่เงินซ้ำ"""
+    """สแกนค้นหาคู่ที่มีโครงสร้างเทรนด์ตรงตามเงื่อนไขชัดเจนที่สุด"""
     global best_candidate_cache
     while True:
         try:
@@ -117,16 +112,15 @@ def background_deep_scanner():
             top_status = "SCANNING"
             highest_score = -999999
 
-            # เช็กครบทุกคู่โดยไม่มีเงื่อนไขคูลดาวน์รายคู่ เลือกตัวที่คะแนนสูงสุดจริงๆ
             for sym in SYMBOLS.keys():
-                direction, score, status = analyze_highest_confidence(sym)
+                direction, score, status = analyze_strict_trend(sym)
                 if score > highest_score:
                     highest_score = score
                     top_sym = sym
                     top_dir = direction
                     top_status = status
 
-            if top_sym:
+            if top_sym and top_dir != "NONE":
                 best_candidate_cache = {
                     "symbol": top_sym,
                     "label": SYMBOLS.get(top_sym, top_sym),
@@ -144,15 +138,17 @@ def send_signal(chat_id):
     try:
         now_time = time.time()
         
-        # คูลดาวน์ภาพรวมสัญญาณ 1 แท่งเทียน (65 วินาที)
+        # คูลดาวน์สัญญาณภาพรวม 1 แท่งเทียน (65 วินาที)
         if now_time - last_global_signal_time < 65:
             return
 
-        # ดึงคู่ที่มั่นใจที่สุด ณ ปัจจุบันทันที (ไม่สนว่าจะเพิ่งส่งคู่ไหนไปก่อนหน้า)
         sym = best_candidate_cache["symbol"]
         label = best_candidate_cache["label"]
         direction = best_candidate_cache["direction"]
         status = best_candidate_cache["status"]
+
+        if direction == "NONE":
+            return
 
         last_global_signal_time = now_time
 
@@ -162,18 +158,18 @@ def send_signal(chat_id):
         target_time_str = target_time.strftime('%H:%M')
 
         is_buy = (direction == "CALL")
-        dir_emoji = "⬆️ BUY 🟢 (Absolute Best Pick)" if is_buy else "⬇️ SELL 🔴 (Absolute Best Pick)"
+        dir_emoji = "⬆️ BUY 🟢 (Strict Trend-Following)" if is_buy else "⬇️ SELL 🔴 (Strict Trend-Following)"
         btn_label = "CALL" if is_buy else "PUT"
 
         card_text = (
-            f"👑 **TITAN ABSOLUTE-BEST MASTER 👑 M1**\n"
+            f"👑 **TITAN STRICT-TREND MASTER 👑 M1**\n"
             f"⚡ **[ไม้ {step}]**\n\n"
-            f"🔥 **คู่ที่มั่นใจที่สุดในรอบนี้:** `{label}`\n"
-            f"📈 **Timeframe:** `M1 (Absolute Highest Score)`\n"
+            f"🔥 **คู่ที่มั่นใจตามเทรนด์ที่สุด:** `{label}`\n"
+            f"📈 **Timeframe:** `M1 (Strict Trend-Follow)`\n"
             f"⌚ **เข้าออเดอร์เวลา:** `{target_time_str}`\n"
             f"🚀 **ทิศทาง:** **{dir_emoji}**\n\n"
-            f"🛡️ **สถานะ:** `{status}`\n"
-            f"⏱️ **Cooldown:** `พักระบบสัญญาณภาพรวม 1 แท่งเทียน (ไม่จำกัดคู่เงิน)`"
+            f"🛡️ **สถานะเทรนด์:** `{status}`\n"
+            f"⏱️ **Cooldown:** `พักระบบสัญญาณ 1 แท่งเทียน`"
         )
 
         markup = InlineKeyboardMarkup(row_width=1)
@@ -208,7 +204,7 @@ def handle_start_scan(message):
     active_chat_ids.add(chat_id)
     if chat_id not in user_martingale_step:
         user_martingale_step[chat_id] = 1
-    bot.reply_to(message, "⚡ **TITAN ABSOLUTE MODE ONLINE**\nเปิดระบบเลือกคู่ที่มั่นใจที่สุดตลอดเวลา (ไม่มีคูลดาวน์รายคู่) เรียบร้อย!", parse_mode="Markdown")
+    bot.reply_to(message, "⚡ **TITAN STRICT TREND ONLINE**\nล็อกระบบตามเทรนด์ 100% ห้ามสวนเทรนด์เด็ดขาดเรียบร้อย!", parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
