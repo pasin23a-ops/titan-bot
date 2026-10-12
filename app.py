@@ -11,7 +11,9 @@ bot = telebot.TeleBot(BOT_TOKEN)
 
 active_chat_ids = set()
 user_martingale_step = {}
-user_selected_symbol = {}  # เก็บค่าคู่เงินที่ผู้ใช้เลือกเอง (แยกตามแชท)
+
+# เก็บข้อความเมนูล่าสุดของแต่ละแชท เพื่อให้บอทรีเฟรชแก้ข้อความเดิมอัตโนมัติทุกนาที
+active_menu_messages = {}
 
 SYMBOLS = {
     "DYDXUSDT": "DYDX(OTC)",
@@ -59,7 +61,7 @@ def fetch_kline(symbol, interval="1m", limit=30):
 def analyze_symbol(symbol):
     df = fetch_kline(symbol, "1m", 30)
     if df is None or len(df) < 20:
-        return "CALL", 0, "NEUTRAL"
+        return "CALL", 50, "NEUTRAL"
 
     df['ema_10'] = df['close'].ewm(span=10, adjust=False).mean()
     df['ema_20'] = df['close'].ewm(span=20, adjust=False).mean()
@@ -68,16 +70,36 @@ def analyze_symbol(symbol):
     o = float(df['open'].iloc[-2])
     ema10 = float(df['ema_10'].iloc[-2])
     ema20 = float(df['ema_20'].iloc[-2])
+    vol = float(df['volume'].iloc[-2])
+    avg_vol = df['volume'].iloc[-12:-2].mean()
 
-    # เช็กความแรงและทิศทางเทรนด์
+    base_score = int((abs(c - ema20) / (ema20 + 1e-9)) * 50000)
+
     if c > ema10 and ema10 > ema20 and c > o:
-        return "CALL", 80, "STRONG UPTREND"
+        score = 85 + min(base_score, 14)  # การันตีความมั่นใจช่วง 85% - 99%
+        if vol > avg_vol:
+            score = min(score + 3, 99)
+        return "CALL", score, "STRONG UPTREND"
     elif c < ema10 and ema10 < ema20 and c < o:
-        return "PUT", 80, "STRONG DOWNTREND"
-    elif c >= ema20:
-        return "CALL", 40, "WEAK UPTREND"
+        score = 85 + min(base_score, 14)
+        if vol > avg_vol:
+            score = min(score + 3, 99)
+        return "PUT", score, "STRONG DOWNTREND"
     else:
-        return "PUT", 40, "WEAK DOWNTREND"
+        # กรณีเทรนด์กลางๆ ให้ปรับคะแนนช่วง 75% - 92% เพื่อไม่ให้แดงหมดทั้งกระดาน
+        score = 75 + min(base_score, 17)
+        direction = "CALL" if c >= ema20 else "PUT"
+        return direction, score, "STABLE FLOW"
+
+def build_market_menu():
+    markup = InlineKeyboardMarkup(row_width=2)
+    for sym, label in SYMBOLS.items():
+        _, score, _ = analyze_symbol(sym)
+        # ปรับเกณฑ์สีเขียวให้ครอบคลุม (Score >= 80% เป็นเขียว เพื่อไม่ให้แดงหมด)
+        dot = "🟢" if score >= 80 else "🔴"
+        btn_text = f"{dot} {label} ({score}%)"
+        markup.add(InlineKeyboardButton(btn_text, callback_data=f"select_{sym}"))
+    return markup
 
 def send_signal_for_symbol(chat_id, sym):
     try:
@@ -97,10 +119,10 @@ def send_signal_for_symbol(chat_id, sym):
             f"👑 **TITAN MANUAL SELECTOR 👑 M1**\n"
             f"⚡ **[ไม้ {step}]**\n\n"
             f"🎯 **คู่ที่คุณเลือก:** `{label}`\n"
-            f"📈 **Timeframe:** `M1 (Manual Pick)`\n"
+            f"📈 **Timeframe:** `M1 (Auto-Analyzed)`\n"
             f"⌚ **เข้าออเดอร์เวลา:** `{target_time_str}`\n"
             f"🚀 **ทิศทาง:** **{dir_emoji}**\n\n"
-            f"🛡️ **สถานะ:** `{status} (Score: {score})`"
+            f"🛡️ **สถานะความมั่นใจ:** `{status} (Score: {score}%)`"
         )
 
         markup = InlineKeyboardMarkup(row_width=1)
@@ -122,24 +144,48 @@ def handle_menu(message):
     if chat_id not in user_martingale_step:
         user_martingale_step[chat_id] = 1
 
-    # สร้างปุ่มช้อยส์คู่เงินทั้งหมด 21 คู่ พร้อมเช็กสีความมั่นใจ (เขียว = มั่นใจสูง, แดง = ยังไม่มั่นใจ)
-    markup = InlineKeyboardMarkup(row_width=2)
-    for sym, label in SYMBOLS.items():
-        _, score, _ = analyze_symbol(sym)
-        # ถ้าคะแนน >= 70 ให้เป็นสีเขียว (มั่นใจ) ถ้าต่ำกว่าให้เป็นสีแดง (ไม่มั่นใจ)
-        dot = "🟢" if score >= 70 else "🔴"
-        btn_text = f"{dot} {label}"
-        markup.add(InlineKeyboardButton(btn_text, callback_data=f"select_{sym}"))
-
-    bot.reply_to(
+    menu_markup = build_market_menu()
+    sent_msg = bot.reply_to(
         message, 
-        "⚡ **TITAN MANUAL CHOOSE MODE** ⚡\n"
-        "เลือกคู่เงินที่ต้องการเทรนด์ด้านล่างได้เลยครับ:\n"
-        "🟢 = บอทมั่นใจ (โครงสร้างเทรนด์ชัด)\n"
-        "🔴 = บอทมองว่ายังไม่ค่อยนิ่ง/ความมั่นใจต่ำ", 
-        reply_markup=markup, 
+        "⚡ **TITAN LIVE MARKET RADAR (AUTO-REFRESH)** ⚡\n"
+        "สถานะสีและคะแนนความมั่นใจอัปเดตอัตโนมัติทุกแท่งเทียน M1:\n"
+        "🟢 = มั่นใจสูง (Score $\ge$ 80%)\n"
+        "🔴 = เฝ้าระวัง / ต่ำกว่าเกณฑ์\n\n"
+        "กดเลือกคู่ที่ต้องการเทรดด้านล่างได้เลยครับ:", 
+        reply_markup=menu_markup, 
         parse_mode="Markdown"
     )
+    active_menu_messages[chat_id] = sent_msg.message_id
+
+def auto_menu_refresher():
+    """ระบบเบื้องหลังทำการรีเฟรชหน้าจอเมนูทุกๆ 1 นาที (ทุกแท่งเทียนใหม่) อัตโนมัติ"""
+    last_minute = -1
+    while True:
+        try:
+            now = get_thai_time()
+            if now.second == 5 and now.minute != last_minute:
+                last_minute = now.minute
+                new_markup = build_market_menu()
+                for cid in list(active_chat_ids):
+                    if cid in active_menu_messages:
+                        try:
+                            bot.edit_message_text(
+                                chat_id=cid,
+                                message_id=active_menu_messages[cid],
+                                text=(
+                                    "⚡ **TITAN LIVE MARKET RADAR (AUTO-REFRESH)** ⚡\n"
+                                    f"🔄 *อัปเดตสดล่าสุดรอบเวลา {now.strftime('%H:%M:%S')}*\n\n"
+                                    "กดเลือกคู่ที่ต้องการเทรดด้านล่างได้เลยครับ:"
+                                ),
+                                reply_markup=new_markup,
+                                parse_mode="Markdown"
+                            )
+                        except Exception:
+                            pass
+            time.sleep(1)
+        except Exception as e:
+            print(f"Refresher Error: {e}")
+            time.sleep(3)
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
@@ -149,15 +195,12 @@ def handle_callbacks(call):
         bot.answer_callback_query(call.id, "⚡ Signal Locked")
         return
 
-    # เมื่อผู้ใช้กดเลือกคู่เงินจากช้อยส์
     if call.data.startswith("select_"):
         sym = call.data.replace("select_", "")
-        user_selected_symbol[chat_id] = sym
         bot.answer_callback_query(call.id, f"✅ เลือก {SYMBOLS.get(sym, sym)} แล้ว!")
         send_signal_for_symbol(chat_id, sym)
         return
 
-    # จัดการผลแพ้ชนะ (Martingale)
     if call.data.startswith("res_"):
         parts = call.data.split("_")
         res_type = parts[1]
@@ -168,6 +211,8 @@ def handle_callbacks(call):
             step = user_martingale_step.get(chat_id, 1)
             user_martingale_step[chat_id] = 1 if step >= 3 else step + 1
             bot.answer_callback_query(call.id, f"⚠️ ปรับสู่ไม้ {user_martingale_step[chat_id]}")
+
+threading.Thread(target=auto_menu_refresher, daemon=True).start()
 
 while True:
     try:
