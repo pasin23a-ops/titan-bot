@@ -39,72 +39,139 @@ SYMBOLS = {
 def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
-def fetch_live_kline_data(symbol):
+def fetch_kline(symbol, interval, limit=50):
     try:
-        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=30"
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
         res = requests.get(url, timeout=3)
         if res.status_code == 200:
-            raw_data = res.json()
-            df = pd.DataFrame(raw_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'])
+            raw = res.json()
+            df = pd.DataFrame(raw, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'])
             df['close'] = df['close'].astype(float)
             df['open'] = df['open'].astype(float)
+            df['high'] = df['high'].astype(float)
+            df['low'] = df['low'].astype(float)
+            df['volume'] = df['volume'].astype(float)
             return df
-    except Exception as e:
-        print(f"Fetch Error {symbol}: {e}")
+    except Exception:
+        pass
     return None
+
+def calculate_rsi(series, period=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / (loss + 1e-9)
+    return 100 - (100 / (1 + rs))
+
+def strict_analyze(symbol):
+    # ดึงข้อมูล M5 และ M1
+    df_m5 = fetch_kline(symbol, "5m", 30)
+    df_m1 = fetch_kline(symbol, "1m", 40)
+
+    if df_m5 is None or len(df_m5) < 20 or df_m1 is None or len(df_m1) < 30:
+        return "NONE", 0, "DATA_INSUFFICIENT"
+
+    # 1. เช็กเทรนด์ M5 จากแท่งที่ปิดแล้ว (iloc[-2])
+    df_m5['ema_20'] = df_m5['close'].ewm(span=20, adjust=False).mean()
+    m5_close = float(df_m5['close'].iloc[-2])
+    m5_ema = float(df_m5['ema_20'].iloc[-2])
+    
+    is_m5_up = m5_close > m5_ema
+    is_m5_down = m5_close < m5_ema
+
+    # 2. เช็กแท่งเทียน M1 ที่ "ปิดสมบูรณ์แล้ว" จริงๆ (iloc[-2]) เพื่อตัดสัญญาณหลอก
+    df_m1['ema_50'] = df_m1['close'].ewm(span=50, adjust=False).mean()
+    df_m1['rsi'] = calculate_rsi(df_m1['close'], 14)
+
+    o = float(df_m1['open'].iloc[-2])
+    c = float(df_m1['close'].iloc[-2])
+    h = float(df_m1['high'].iloc[-2])
+    l = float(df_m1['low'].iloc[-2])
+    ema = float(df_m1['ema_50'].iloc[-2])
+    rsi = float(df_m1['rsi'].iloc[-2])
+    vol = float(df_m1['volume'].iloc[-2])
+    avg_vol = df_m1['volume'].iloc[-15:-2].mean()
+
+    is_green = c > o
+    is_red = c < o
+    body_size = abs(c - o)
+    body_pct = (body_size / o) * 100
+
+    # กฎเหล็กที่ 1: ขนาดเนื้อเทียนต้องมีความชัดเจน (ไม่เอาโดจิหรือแท่งแคบเกินไป)
+    if body_pct < 0.04:
+        return "NONE", 0, "FILTER: DOJI / LOW_BODY_SIZE"
+
+    # กฎเหล็กที่ 2: วอลลุ่มต้องสูงกว่าค่าเฉลี่ย
+    if vol < (avg_vol * 0.8):
+        return "NONE", 0, "FILTER: LOW_VOLUME"
+
+    # คำนวณ Score จากความห่างและเนื้อเทียน
+    score = int((abs(c - ema) / ema) * 10000 + (body_pct * 200))
+
+    # --- ตรวจสอบฝั่ง UPTREND (CALL) ---
+    if is_m5_up and is_green and c > ema:
+        # เช็กไส้เทียนบน (ห้ามมีแรงขายกดทับเยอะเกินไป)
+        if (h - c) / (h - l + 1e-9) > 0.4:
+            return "NONE", 0, "FILTER: UPPER_REJECTION"
+        # เช็ก RSI (ห้ามเข้าถ้า Overbought เกินไป)
+        if 50 <= rsi <= 72:
+            return "CALL", score, f"TITAN ELITE UPTREND (Score: {score})"
+
+    # --- ตรวจสอบฝั่ง DOWNTREND (PUT) ---
+    elif is_m5_down and is_red and c < ema:
+        # เช็กไส้เทียนล่าง (ห้ามมีแรงซื้อดันกลับเยอะเกินไป)
+        if (c - l) / (h - l + 1e-9) > 0.4:
+            return "NONE", 0, "FILTER: LOWER_REJECTION"
+        # เช็ก RSI (ห้ามเข้าถ้า Oversold เกินไป)
+        if 28 <= rsi <= 50:
+            return "PUT", score, f"TITAN ELITE DOWNTREND (Score: {score})"
+
+    return "NONE", 0, "NO_MATCH"
 
 def find_best_signal():
     best_sym = None
-    best_direction = "NONE"
+    best_dir = "NONE"
+    best_status = "NO_SIGNAL"
     highest_score = -1
 
     for sym in SYMBOLS.keys():
-        df = fetch_live_kline_data(sym)
-        if df is not None and len(df) >= 10:
-            df['ema'] = df['close'].ewm(span=10, adjust=False).mean()
-            last_close = float(df['close'].iloc[-1])
-            last_open = float(df['open'].iloc[-1])
-            last_ema = float(df['ema'].iloc[-1])
-
-            body_size = abs(last_close - last_open)
-            score = (abs(last_close - last_ema) / (last_ema + 1e-9)) * 10000
-
-            if last_close > last_ema and last_close > last_open:
-                if score > highest_score:
-                    highest_score = score
-                    best_sym = sym
-                    best_direction = "CALL"
-            elif last_close < last_ema and last_close < last_open:
-                if score > highest_score:
-                    highest_score = score
-                    best_sym = sym
-                    best_direction = "PUT"
+        direction, score, status = strict_analyze(sym)
+        if direction != "NONE" and score > highest_score:
+            highest_score = score
+            best_sym = sym
+            best_dir = direction
+            best_status = status
 
     if best_sym:
-        return best_sym, SYMBOLS.get(best_sym, best_sym), best_direction, int(highest_score)
-    return "DYDXUSDT", "DYDX(OTC)", "CALL", 100 # Fallback เพื่อให้มีสัญญาณเสมอ
+        return best_sym, SYMBOLS.get(best_sym, best_sym), best_dir, best_status
+    return None, None, "NONE", "MARKET_UNCERTAIN_WAITING"
 
 def send_signal(chat_id):
     try:
-        sym, label, direction, score = find_best_signal()
-        step = user_martingale_step.get(chat_id, 1)
+        sym, label, direction, status = find_best_signal()
+        
+        # ถ้าไม่มีคู่ไหนผ่านเกณฑ์เลย บอทจะไม่ส่งสัญญาณขยะออกไป (ยอมเงียบเพื่อความปลอดภัย)
+        if not sym or direction == "NONE":
+            print(f"[{get_thai_time().strftime('%H:%M:%S')}] ตลาดไม่สวย ผ่านการกรอง 0 คู่ (งดส่งสัญญาณ)")
+            return
 
+        step = user_martingale_step.get(chat_id, 1)
         now = get_thai_time()
         target_time = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
         target_time_str = target_time.strftime('%H:%M')
 
         is_buy = (direction == "CALL")
-        dir_emoji = "⬆️ BUY 🟢" if is_buy else "⬇️ SELL 🔴"
+        dir_emoji = "⬆️ BUY 🟢 (กรองเข้มข้นพิเศษ)" if is_buy else "⬇️ SELL 🔴 (กรองเข้มข้นพิเศษ)"
         btn_label = "CALL" if is_buy else "PUT"
 
         card_text = (
-            f"⚡ **TITAN FAST-FLOW MASTER 👑 M1**\n"
+            f"👑 **TITAN ELITE MASTER 👑 M1**\n"
             f"⚡ **[ไม้ {step}]**\n\n"
-            f"💎 **คู่ที่เลือก:** `{label}`\n"
-            f"📈 **Timeframe:** `M1`\n"
+            f"💎 **คู่ที่ผ่านเกณฑ์:** `{label}`\n"
+            f"📈 **Timeframe:** `M1 (Closed Candle)`\n"
             f"⌚ **เข้าออเดอร์เวลา:** `{target_time_str}`\n"
             f"🚀 **ทิศทาง:** **{dir_emoji}**\n\n"
-            f"🛡️ **สถานะ:** `MOMENTUM CONFIRMED (Score: {score})`"
+            f"🛡️ **สถานะ:** `{status}`"
         )
 
         markup = InlineKeyboardMarkup(row_width=1)
@@ -139,8 +206,7 @@ def handle_start_scan(message):
     active_chat_ids.add(chat_id)
     if chat_id not in user_martingale_step:
         user_martingale_step[chat_id] = 1
-    bot.reply_to(message, "⚡ **TITAN BOT RECONNECTED**\nกำลังส่งสัญญาณรอบล่าสุดทันที...")
-    send_signal(chat_id)
+    bot.reply_to(message, "👑 **TITAN ELITE FILTER ONLINE**\nเปิดโหมดกรองเข้มข้นสูงสุด (ไม่ผ่านเกณฑ์จะไม่ส่งสัญญาณรบกวน) ระบบพร้อมทำงานแล้ว!", parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
