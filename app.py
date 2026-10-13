@@ -41,8 +41,8 @@ best_autopilot_cache = {
     "symbol": "",
     "label": "",
     "direction": "NONE",
-    "status": "DEEP_SCANNING",
-    "score": -999999
+    "status": "STRICT_TREND_MODE",
+    "score": 0
 }
 
 def get_thai_time():
@@ -82,7 +82,7 @@ def fetch_kline(symbol, interval="1m", limit=30):
 def analyze_autopilot(symbol):
     df = fetch_kline(symbol, "1m", 30)
     if df is None or len(df) < 20:
-        return "NONE", -999999, "DATA_ERROR"
+        return "NONE", 0, "DATA_ERROR"
 
     df['ema_10'] = df['close'].ewm(span=10, adjust=False).mean()
     df['ema_20'] = df['close'].ewm(span=20, adjust=False).mean()
@@ -94,7 +94,7 @@ def analyze_autopilot(symbol):
 
     distance_score = int((abs(c - ema20) / (ema20 + 1e-9)) * 100000)
 
-    # ระบบกรองเทรนด์เข้มงวด ห้ามสวน
+    # คงระบบกรองแท่นเทียนและเส้น EMA เข้มงวดตามเทรนด์ 100% ห้ามสวน
     if c < o and c < ema10 and c < ema20:
         return "PUT", distance_score, "STRICT DOWNTREND"
     elif c > o and c > ema10 and c > ema20:
@@ -108,21 +108,19 @@ def background_scanner():
         try:
             top_sym = None
             top_dir = "NONE"
-            top_status = "DEEP_SCANNING"
+            top_status = "SCANNING"
             highest_score = -999999
 
-            MIN_PTS_THRESHOLD = 75
-
-            # วนลูปคำนวณแบบละเอียดยิบทุกสินทรัพย์ตลอดช่วง Cooldown
+            # ไม่จำกัด PTS ขั้นต่ำ เอาเฉพาะที่ผ่านเงื่อนไขเทรนด์หลัก
             for sym in SYMBOLS.keys():
                 direction, score, status = analyze_autopilot(sym)
-                if score >= MIN_PTS_THRESHOLD and score > highest_score and direction != "NONE":
+                if score > highest_score and direction != "NONE":
                     highest_score = score
                     top_sym = sym
                     top_dir = direction
                     top_status = status
 
-            if top_sym and highest_score >= MIN_PTS_THRESHOLD:
+            if top_sym and top_dir != "NONE":
                 best_autopilot_cache = {
                     "symbol": top_sym,
                     "label": SYMBOLS.get(top_sym, top_sym),
@@ -131,7 +129,6 @@ def background_scanner():
                     "score": highest_score
                 }
             
-            # วนลูปเช็คความถี่ต่อเนื่องแบบเรียลไทม์
             time.sleep(1)
         except Exception as e:
             print(f"Scanner Error: {e}")
@@ -142,14 +139,13 @@ def send_auto_signal(chat_id):
     try:
         now_time = time.time()
         
-        # Cooldown ล็อค 60 วินาที (1 แท่งเทียน) ระหว่างส่งสัญญาณ
         if now_time - last_global_signal_time < 60:
             return
 
         direction = best_autopilot_cache["direction"]
         score = best_autopilot_cache["score"]
 
-        if direction == "NONE" or score < 75:
+        if direction == "NONE":
             return
 
         sym = best_autopilot_cache["symbol"]
@@ -168,10 +164,10 @@ def send_auto_signal(chat_id):
         btn_label = "CALL" if is_buy else "PUT"
 
         card_text = (
-            f"⚡ **TITAN AUTO-PILOT v6.4** ⚡\n"
+            f"⚡ **TITAN AUTO-PILOT v6.6** ⚡\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🥊 **การเดินเงิน:** `ไม้ที่ {step}`\n"
-            f"🎯 **คู่ที่มั่นใจตามเทรนด์ที่สุด:** `{label}`\n"
+            f"🎯 **คู่ตามเทรนด์:** `{label}`\n"
             f"⏱️ **เข้าออเดอร์แท่งถัดไป:** `{target_time_str}` (M1)\n\n"
             f"🔥 **ทิศทางคำสั่ง:** **{dir_emoji}**\n\n"
             f"📊 **สถานะเทรนด์:** `{status}`\n"
@@ -181,7 +177,7 @@ def send_auto_signal(chat_id):
         )
 
         markup = InlineKeyboardMarkup(row_width=1)
-        markup.add(InlineKeyboardButton(f"⚡ AUTO EXECUTED ({btn_label}) ⚡", callback_data="do_nothing"))
+        markup.add(InlineKeyboardButton(f"⚡ AUTO SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
         markup.add(
             InlineKeyboardButton("💎 ชนะไม้ 1", callback_data=f"res_win1_{sym}"),
             InlineKeyboardButton("🥈 ชนะไม้ 2", callback_data=f"res_win2_{sym}"),
@@ -197,7 +193,6 @@ def auto_broadcaster():
     while True:
         try:
             now = get_thai_time()
-            # ยิงสัญญาณทันทีที่วินาทีที่ 30 ของทุกนาที
             if now.second == 30 and now.minute != last_sent_minute:
                 last_sent_minute = now.minute
                 for cid in list(active_chat_ids):
@@ -216,8 +211,8 @@ def handle_start(message):
     
     bot.reply_to(
         message, 
-        "🚀 **TITAN AUTO-PILOT v6.4 ACTIVATED** 🚀\n"
-        "เปิดระบบคำนวณเจาะลึกเบื้องหลังตลอดช่วง Cooldown สัญญาณเข้าต่อเนื่องไม่มีสะดุด!", 
+        "🚀 **TITAN AUTO-PILOT v6.6 ACTIVATED** 🚀\n"
+        "คงระบบกรองแท่นเทียนและ EMA ตามเทรนด์ครบถ้วน ปลดล็อคเกณฑ์ PTS แล้ว สัญญาณมาต่อเนื่องแน่นอน!", 
         parse_mode="Markdown"
     )
 
@@ -225,7 +220,7 @@ def handle_start(message):
 def handle_callbacks(call):
     chat_id = call.message.chat.id
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ Auto Mode Active")
+        bot.answer_callback_query(call.id, "⚡ Trend Filter Active")
         return
     if call.data.startswith("res_"):
         parts = call.data.split("_")
