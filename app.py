@@ -13,8 +13,6 @@ active_chat_ids = set()
 user_martingale_step = {}
 last_global_signal_time = 0 
 
-resting_symbols = {}
-
 SYMBOLS = {
     "DYDXUSDT": "DYDX(OTC)",
     "XAUUSDT": "XAUUSD(OTC)",
@@ -43,9 +41,8 @@ best_autopilot_cache = {
     "symbol": "",
     "label": "",
     "direction": "NONE",
-    "status": "SNIPER_SHIELD_ACTIVE",
-    "score": 0,
-    "is_risky": False
+    "status": "SMART_BALANCE_ACTIVE",
+    "score": 0
 }
 
 def get_thai_time():
@@ -85,7 +82,7 @@ def fetch_kline(symbol, interval="1m", limit=30):
 def analyze_autopilot(symbol):
     df = fetch_kline(symbol, "1m", 30)
     if df is None or len(df) < 20:
-        return "NONE", 0, "DATA_ERROR", False
+        return "NONE", 0, "DATA_ERROR"
 
     df['ema_10'] = df['close'].ewm(span=10, adjust=False).mean()
     df['ema_20'] = df['close'].ewm(span=20, adjust=False).mean()
@@ -99,89 +96,44 @@ def analyze_autopilot(symbol):
 
     distance_score = int((abs(c - ema20) / (ema20 + 1e-9)) * 100000)
 
-    # ตัดคะแนนกระชากเกิน 180 PTS ทิ้ง ป้องกันลากไส้แตก
-    if distance_score > 180:
-        return "NONE", distance_score, "EXHAUSTION_TRAP", False
-
-    # [SNIPER SHIELD] กรองแท่งเทียนจิ๋ว (Sideway / Doji / ไร้แรงส่ง) ห้ามหลุดรอดมาเด็ดขาด
+    # กรองเฉพาะแท่งเทียนที่ไม่มีพลัง (บอดี้เล็กจิ๋ว ไซด์เวย์เสี่ยงโดนตบแบบเคส 21 PTS) ออกไปเบาๆ
     body_size = abs(c - o)
     total_range = h - l
-    if total_range > 0 and (body_size / total_range) < 0.35:
-        return "NONE", distance_score, "WEAK_BODY_FILTERED", False
+    if total_range > 0 and (body_size / total_range) < 0.20: # กรองเฉพาะแท่งจิ๋วจริงๆ ออก
+        return "NONE", distance_score, "WEAK_SIDEWAY"
 
-    recent_high = df['high'].iloc[-20:-2].max()
-    recent_low = df['low'].iloc[-20:-2].min()
+    # เช็คทิศทางเทรนด์ EMA แบบต่อเนื่องเพื่อให้สัญญาณมาตลอด
+    if c < ema10 and c < ema20:
+        return "PUT", distance_score, "DOWNTREND MOMENTUM"
+    elif c > ema10 and c > ema20:
+        return "CALL", distance_score, "UPTREND MOMENTUM"
     
-    is_risky = False
-    status_msg = "SIDEWAY"
-    direction = "NONE"
-
-    # [STRICT COLOR MATCH] PUT: ต้องแดงเท่านั้น + อยู่ใต้ EMA 10/20
-    if c < o and c < ema10 and c < ema20:
-        direction = "PUT"
-        status_msg = "STRICT DOWNTREND (RED)"
-        if abs(c - recent_low) / (c + 1e-9) < 0.0008:
-            is_risky = True
-
-    # [STRICT COLOR MATCH] CALL: ต้องเขียวเท่านั้น + อยู่เหนือ EMA 10/20
-    elif c > o and c > ema10 and c > ema20:
-        direction = "CALL"
-        status_msg = "STRICT UPTREND (GREEN)"
-        if abs(recent_high - c) / (c + 1e-9) < 0.0008:
-            is_risky = True
-
-    return direction, distance_score, status_msg, is_risky
+    return "NONE", distance_score, "SIDEWAY"
 
 def background_scanner():
     global best_autopilot_cache
     while True:
         try:
-            for cid in list(resting_symbols.keys()):
-                for sym in list(resting_symbols[cid]):
-                    _, _, _, is_risky = analyze_autopilot(sym)
-                    if not is_risky:
-                        resting_symbols[cid].remove(sym)
+            top_sym = None
+            top_dir = "NONE"
+            top_status = "SCANNING"
+            highest_score = -999999
 
-            candidates = []
             for sym in SYMBOLS.keys():
-                direction, score, status, is_risky = analyze_autopilot(sym)
-                if direction != "NONE":
-                    candidates.append({
-                        "symbol": sym,
-                        "direction": direction,
-                        "score": score,
-                        "status": status,
-                        "is_risky": is_risky
-                    })
+                direction, score, status = analyze_autopilot(sym)
+                if score > highest_score and direction != "NONE":
+                    highest_score = score
+                    top_sym = sym
+                    top_dir = direction
+                    top_status = status
 
-            active_resting = set()
-            for r_set in resting_symbols.values():
-                active_resting.update(r_set)
-
-            available_candidates = [c for c in candidates if c["symbol"] not in active_resting]
-
-            safe_candidates = [c for c in available_candidates if not c["is_risky"]]
-            target_list = safe_candidates if safe_candidates else available_candidates
-
-            if target_list:
-                target_list.sort(key=lambda x: x['score'], reverse=True)
-                top = target_list[0]
+            if top_sym and top_dir != "NONE":
                 best_autopilot_cache = {
-                    "symbol": top["symbol"],
-                    "label": SYMBOLS.get(top["symbol"], top["symbol"]),
-                    "direction": top["direction"],
-                    "status": top["status"],
-                    "score": top["score"],
-                    "is_risky": top["is_risky"]
-                }
-            else:
-                best_autopilot_cache = {
-                    "symbol": "",
-                    "label": "",
-                    "direction": "NONE",
-                    "status": "SCANNING_MARKET",
-                    "score": 0,
-                    "is_risky": False
+                    "symbol": top_sym,
+                    "label": SYMBOLS.get(top_sym, top_sym),
+                    "direction": top_dir,
+                    "status": top_status,
+                    "score": highest_score
                 }
             
             time.sleep(1)
@@ -194,13 +146,12 @@ def send_auto_signal(chat_id):
     try:
         now_time = time.time()
         
-        # [COOLDOWN] ล็อค 60 วินาทีไม่ให้ยิงเบิ้ลในนาทีเดิม
+        # Cooldown 60 วินาที ส่งต่อเนื่องทุกแท่งเทียน
         if now_time - last_global_signal_time < 60:
             return
 
         direction = best_autopilot_cache["direction"]
         score = best_autopilot_cache["score"]
-        is_risky = best_autopilot_cache["is_risky"]
 
         if direction == "NONE":
             return
@@ -208,9 +159,6 @@ def send_auto_signal(chat_id):
         sym = best_autopilot_cache["symbol"]
         label = best_autopilot_cache["label"]
         status = best_autopilot_cache["status"]
-
-        if chat_id in resting_symbols and sym in resting_symbols[chat_id]:
-            return
 
         last_global_signal_time = now_time
 
@@ -223,15 +171,9 @@ def send_auto_signal(chat_id):
         dir_emoji = "🟢 BUY (CALL) 🟢" if is_buy else "🔴 SELL (PUT) 🔴"
         btn_label = "CALL" if is_buy else "PUT"
 
-        risk_warning_text = (
-            "⚠️ **แจ้งเตือน: คู่นี้มีความเสี่ยงสูง (จ่อแนวรับ/แนวต้านสำคัญ)!**\n"
-            "👉 *หลังจากชนะไม้นี้แล้ว ให้หยุดพักคู่นี้ชั่วคราวเพื่อรอคำนวณใหม่*\n"
-        ) if is_risky else ""
-
         card_text = (
-            f"⚡ **TITAN AUTO-PILOT (Sniper Shield)** ⚡\n"
+            f"⚡ **TITAN AUTO-PILOT (Smart Balance)** ⚡\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"{risk_warning_text}"
             f"🥊 **การเดินเงิน:** `ไม้ที่ {step}`\n"
             f"🎯 **คู่ตามเทรนด์:** `{label}`\n"
             f"⏱️ **เข้าออเดอร์แท่งถัดไป:** `{target_time_str}` (M1)\n\n"
@@ -239,18 +181,16 @@ def send_auto_signal(chat_id):
             f"📊 **สถานะเทรนด์:** `{status}`\n"
             f"🛡️ **Score Strength:** `{score} PTS`\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"⏱️ *Cooldown: บังคับพักระบบ 60 วินาทีเรียบร้อย*"
+            f"⏱️ *Cooldown: ส่งสัญญาณต่อเนื่องทุกแท่งเทียน*"
         )
 
-        risk_flag = "risky" if is_risky else "safe"
-
         markup = InlineKeyboardMarkup(row_width=1)
-        markup.add(InlineKeyboardButton(f"⚡ SNIPER SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
+        markup.add(InlineKeyboardButton(f"⚡ SMART SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
         markup.add(
-            InlineKeyboardButton("💎 ชนะไม้ 1", callback_data=f"res_win1_{sym}_{risk_flag}"),
-            InlineKeyboardButton("🥈 ชนะไม้ 2", callback_data=f"res_win2_{sym}_{risk_flag}"),
-            InlineKeyboardButton("🥉 ชนะไม้ 3", callback_data=f"res_win3_{sym}_{risk_flag}"),
-            InlineKeyboardButton("❌ แพ้ (LOSS)", callback_data=f"res_loss_{sym}_{risk_flag}")
+            InlineKeyboardButton("💎 ชนะไม้ 1", callback_data=f"res_win1_{sym}"),
+            InlineKeyboardButton("🥈 ชนะไม้ 2", callback_data=f"res_win2_{sym}"),
+            InlineKeyboardButton("🥉 ชนะไม้ 3", callback_data=f"res_win3_{sym}"),
+            InlineKeyboardButton("❌ แพ้ (LOSS)", callback_data=f"res_loss_{sym}")
         )
         bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
     except Exception as e:
@@ -274,14 +214,13 @@ def auto_broadcaster():
 def handle_start(message):
     chat_id = message.chat.id
     active_chat_ids.add(chat_id)
-    user_martingale_step[chat_id] = 1
-    if chat_id in resting_symbols:
-        resting_symbols[chat_id].clear()
+    if chat_id not in user_martingale_step:
+        user_martingale_step[chat_id] = 1
     
     bot.reply_to(
         message, 
-        "🚀 **TITAN AUTO-PILOT SNIPER ACTIVATED** 🚀\n"
-        "ปลดเกณฑ์ขั้นต่ำออกแล้ว! พร้อมระบบกรองบอดี้แท่งเทียนจิ๋วและบล็อกไส้สะบัดหลอกตา ลุยกันยาวๆ ครับนาย!", 
+        "🚀 **TITAN AUTO-PILOT SMART BALANCE ACTIVATED** 🚀\n"
+        "สัญญาณวิ่งส่งต่อเนื่องทุกแท่งเทียน พร้อมระบบกรองแท่งจิ๋ว/ไซด์เวย์ไร้พลังออก ป้องกันเคสโดนตบซ้ำซ้อน!", 
         parse_mode="Markdown"
     )
 
@@ -289,32 +228,14 @@ def handle_start(message):
 def handle_callbacks(call):
     chat_id = call.message.chat.id
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ Sniper Shield Active")
+        bot.answer_callback_query(call.id, "⚡ Smart Balance Active")
         return
-    
     if call.data.startswith("res_"):
         parts = call.data.split("_")
         res_type = parts[1]
-        sym = parts[2] if len(parts) >= 4 else ""
-        risk_flag = parts[-1] if len(parts) >= 5 else "safe"
-
         if res_type in ["win1", "win2", "win3"]:
             user_martingale_step[chat_id] = 1
-            
-            if risk_flag == "risky":
-                if chat_id not in resting_symbols:
-                    resting_symbols[chat_id] = set()
-                resting_symbols[chat_id].add(sym)
-                
-                bot.answer_callback_query(call.id, "💎 WIN! สั่งพักคู่นี้ชั่วคราวตามเกณฑ์ความเสี่ยง")
-                bot.send_message(
-                    chat_id, 
-                    f"⏸️ **RESTING PAIR:** ชนะในคู่ที่มีความเสี่ยงสูง (`{SYMBOLS.get(sym, sym)}`) เรียบร้อย!\n"
-                    f"บอทพักคู่นี้ชั่วคราวและกำลังเฝ้าระวังเบื้องหลัง ทันทีที่กราฟหายเสี่ยง บอทจะดึงกลับมาคำนวณส่งสัญญาณต่อให้อัตโนมัติครับ!"
-                )
-            else:
-                bot.answer_callback_query(call.id, "💎 WIN! Reset สู่ไม้ 1")
-                
+            bot.answer_callback_query(call.id, "💎 WIN! Reset สู่ไม้ 1")
         elif res_type == "loss":
             step = user_martingale_step.get(chat_id, 1)
             user_martingale_step[chat_id] = 1 if step >= 3 else step + 1
