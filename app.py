@@ -43,7 +43,7 @@ best_autopilot_cache = {
     "symbol": "",
     "label": "",
     "direction": "NONE",
-    "status": "ULTRA_SHIELD_ACTIVE",
+    "status": "SNIPER_SHIELD_ACTIVE",
     "score": 0,
     "is_risky": False
 }
@@ -92,14 +92,22 @@ def analyze_autopilot(symbol):
 
     c = float(df['close'].iloc[-2])
     o = float(df['open'].iloc[-2])
+    h = float(df['high'].iloc[-2])
+    l = float(df['low'].iloc[-2])
     ema10 = float(df['ema_10'].iloc[-2])
     ema20 = float(df['ema_20'].iloc[-2])
 
     distance_score = int((abs(c - ema20) / (ema20 + 1e-9)) * 100000)
 
-    # ตัดคะแนนกระชากเกิน 150 PTS ทิ้งทันที ป้องกันเคส Overextended
-    if distance_score > 150:
+    # ตัดคะแนนกระชากเกิน 180 PTS ทิ้ง ป้องกันลากไส้แตก
+    if distance_score > 180:
         return "NONE", distance_score, "EXHAUSTION_TRAP", False
+
+    # [SNIPER SHIELD] กรองแท่งเทียนจิ๋ว (Sideway / Doji / ไร้แรงส่ง) ห้ามหลุดรอดมาเด็ดขาด
+    body_size = abs(c - o)
+    total_range = h - l
+    if total_range > 0 and (body_size / total_range) < 0.35:
+        return "NONE", distance_score, "WEAK_BODY_FILTERED", False
 
     recent_high = df['high'].iloc[-20:-2].max()
     recent_low = df['low'].iloc[-20:-2].min()
@@ -108,18 +116,17 @@ def analyze_autopilot(symbol):
     status_msg = "SIDEWAY"
     direction = "NONE"
 
-    # [ULTRA SHIELD] เช็คสีแท่งเทียนต้องตรงกับทิศทาง (ห้ามสวนแท่งเขียว/แดงเด็ดขาด)
-    # PUT: ต้องเป็นเทรนด์ขาลง + แท่งก่อนหน้าต้องเป็น "แท่งแดง" (Close < Open) เท่านั้น
+    # [STRICT COLOR MATCH] PUT: ต้องแดงเท่านั้น + อยู่ใต้ EMA 10/20
     if c < o and c < ema10 and c < ema20:
         direction = "PUT"
-        status_msg = "STRICT DOWNTREND (RED CANDLE)"
+        status_msg = "STRICT DOWNTREND (RED)"
         if abs(c - recent_low) / (c + 1e-9) < 0.0008:
             is_risky = True
 
-    # CALL: ต้องเป็นเทรนด์ขาขึ้น + แท่งก่อนหน้าต้องเป็น "แท่งเขียว" (Close > Open) เท่านั้น
+    # [STRICT COLOR MATCH] CALL: ต้องเขียวเท่านั้น + อยู่เหนือ EMA 10/20
     elif c > o and c > ema10 and c > ema20:
         direction = "CALL"
-        status_msg = "STRICT UPTREND (GREEN CANDLE)"
+        status_msg = "STRICT UPTREND (GREEN)"
         if abs(recent_high - c) / (c + 1e-9) < 0.0008:
             is_risky = True
 
@@ -172,7 +179,7 @@ def background_scanner():
                     "symbol": "",
                     "label": "",
                     "direction": "NONE",
-                    "status": "WAITING_SAFE_SETUP",
+                    "status": "SCANNING_MARKET",
                     "score": 0,
                     "is_risky": False
                 }
@@ -187,7 +194,7 @@ def send_auto_signal(chat_id):
     try:
         now_time = time.time()
         
-        # [COOLDOWN CHECK] ล็อคบังคับห่างกันอย่างน้อย 60 วินาที
+        # [COOLDOWN] ล็อค 60 วินาทีไม่ให้ยิงเบิ้ลในนาทีเดิม
         if now_time - last_global_signal_time < 60:
             return
 
@@ -222,7 +229,7 @@ def send_auto_signal(chat_id):
         ) if is_risky else ""
 
         card_text = (
-            f"⚡ **TITAN AUTO-PILOT (v7.1 Ultra-Shield)** ⚡\n"
+            f"⚡ **TITAN AUTO-PILOT (Sniper Shield)** ⚡\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"{risk_warning_text}"
             f"🥊 **การเดินเงิน:** `ไม้ที่ {step}`\n"
@@ -238,7 +245,7 @@ def send_auto_signal(chat_id):
         risk_flag = "risky" if is_risky else "safe"
 
         markup = InlineKeyboardMarkup(row_width=1)
-        markup.add(InlineKeyboardButton(f"⚡ ULTRA SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
+        markup.add(InlineKeyboardButton(f"⚡ SNIPER SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
         markup.add(
             InlineKeyboardButton("💎 ชนะไม้ 1", callback_data=f"res_win1_{sym}_{risk_flag}"),
             InlineKeyboardButton("🥈 ชนะไม้ 2", callback_data=f"res_win2_{sym}_{risk_flag}"),
@@ -273,8 +280,8 @@ def handle_start(message):
     
     bot.reply_to(
         message, 
-        "🚀 **TITAN AUTO-PILOT v7.1 ACTIVATED** 🚀\n"
-        "เปิดระบบ Ultra-Shield ปิดช่องโหว่สวนแท่งเทียน + จำกัดเพดานคะแนนไม่ให้เกิน 150 PTS + ล็อค Cooldown 60 วินาทีสมบูรณ์แบบ!", 
+        "🚀 **TITAN AUTO-PILOT SNIPER ACTIVATED** 🚀\n"
+        "ปลดเกณฑ์ขั้นต่ำออกแล้ว! พร้อมระบบกรองบอดี้แท่งเทียนจิ๋วและบล็อกไส้สะบัดหลอกตา ลุยกันยาวๆ ครับนาย!", 
         parse_mode="Markdown"
     )
 
@@ -282,7 +289,7 @@ def handle_start(message):
 def handle_callbacks(call):
     chat_id = call.message.chat.id
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ Ultra-Shield Active")
+        bot.answer_callback_query(call.id, "⚡ Sniper Shield Active")
         return
     
     if call.data.startswith("res_"):
