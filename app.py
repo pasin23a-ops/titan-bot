@@ -14,11 +14,11 @@ user_martingale_step = {}
 last_global_signal_time = 0 
 
 best_autopilot_cache = {
-    "symbol": "DYDXUSDT",
-    "label": "DYDX(OTC)",
-    "direction": "CALL",
+    "symbol": "XAUUSDT",
+    "label": "XAUUSD(OTC)",
+    "direction": "PUT",
     "status": "INITIALIZING",
-    "score": 0
+    "score": -99999
 }
 
 SYMBOLS = {
@@ -66,51 +66,62 @@ def fetch_kline(symbol, interval="1m", limit=30):
 
 def analyze_autopilot(symbol):
     df = fetch_kline(symbol, "1m", 30)
+    # หากดึงข้อมูลไม่ได้ ให้คืนค่าคะแนนติดลบหนักๆ เพื่อข้ามคู่นี้ไปเลย ไม่ส่งมั่ว
     if df is None or len(df) < 20:
-        return "CALL", 50, "DEFAULT"
+        return "NONE", -99999, "DATA_ERROR"
 
     df['ema_10'] = df['close'].ewm(span=10, adjust=False).mean()
     df['ema_20'] = df['close'].ewm(span=20, adjust=False).mean()
 
     c = float(df['close'].iloc[-2])
+    o = float(df['open'].iloc[-2])
     ema10 = float(df['ema_10'].iloc[-2])
     ema20 = float(df['ema_20'].iloc[-2])
 
-    score = int((abs(c - ema20) / (ema20 + 1e-9)) * 10000)
+    distance_score = int((abs(c - ema20) / (ema20 + 1e-9)) * 100000)
 
-    if c >= ema20:
-        return "CALL", score + 500, "STRICT UPTREND"
+    # --- บังคับตามเทรนด์ 100% ---
+    # 1. แท่งแดง + ราคา < EMA10 & EMA20 -> บังคับกด PUT (SELL) เท่านั้น!
+    if c < o and c < ema10 and c < ema20:
+        return "PUT", distance_score + 1000, "STRICT DOWNTREND"
+    
+    # 2. แท่งเขียว + ราคา > EMA10 & EMA20 -> บังคับกด CALL (BUY) เท่านั้น!
+    elif c > o and c > ema10 and c > ema20:
+        return "CALL", distance_score + 1000, "STRICT UPTREND"
+    
+    # 3. ถ้ากราฟไม่ชัด ให้ยึดฝั่งราคาเทียบกับ EMA20 แต่ตัดคะแนนลง
+    elif c < ema20:
+        return "PUT", distance_score, "WEAK DOWNTREND"
     else:
-        return "PUT", score + 500, "STRICT DOWNTREND"
+        return "CALL", distance_score, "WEAK UPTREND"
 
 def background_scanner():
     global best_autopilot_cache
     while True:
         try:
             top_sym = None
-            top_dir = "CALL"
+            top_dir = "NONE"
             top_status = "SCANNING"
-            highest_score = -99999
+            highest_score = -999999
 
+            # วนสแกนทุกคู่จริงๆ เพื่อหาคู่ที่มีคะแนนสูงสุด
             for sym in SYMBOLS.keys():
                 direction, score, status = analyze_autopilot(sym)
-                if score > highest_score:
+                if score > highest_score and direction != "NONE":
                     highest_score = score
                     top_sym = sym
                     top_dir = direction
                     top_status = status
 
-            if not top_sym:
-                top_sym = "DYDXUSDT"
-
-            best_autopilot_cache = {
-                "symbol": top_sym,
-                "label": SYMBOLS.get(top_sym, top_sym),
-                "direction": top_dir,
-                "status": top_status,
-                "score": highest_score
-            }
-            time.sleep(2)
+            if top_sym:
+                best_autopilot_cache = {
+                    "symbol": top_sym,
+                    "label": SYMBOLS.get(top_sym, top_sym),
+                    "direction": top_dir,
+                    "status": top_status,
+                    "score": highest_score
+                }
+            time.sleep(1.5)
         except Exception as e:
             print(f"Scanner Error: {e}")
             time.sleep(3)
@@ -124,9 +135,12 @@ def send_auto_signal(chat_id):
         if now_time - last_global_signal_time < 60:
             return
 
+        direction = best_autopilot_cache["direction"]
+        if direction == "NONE":
+            return
+
         sym = best_autopilot_cache["symbol"]
         label = best_autopilot_cache["label"]
-        direction = best_autopilot_cache["direction"]
         status = best_autopilot_cache["status"]
         score = best_autopilot_cache["score"]
 
@@ -142,10 +156,10 @@ def send_auto_signal(chat_id):
         btn_label = "CALL" if is_buy else "PUT"
 
         card_text = (
-            f"⚡ **TITAN AUTO-PILOT MASTER v5.0** ⚡\n"
+            f"⚡ **TITAN AUTO-PILOT MASTER v6.0** ⚡\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🥊 **การเดินเงิน:** `ไม้ที่ {step}`\n"
-            f"🎯 **คู่ที่ดีที่สุดอัตโนมัติ:** `{label}`\n"
+            f"🎯 **คู่ที่มั่นใจตามเทรนด์ที่สุด:** `{label}`\n"
             f"⏱️ **เข้าออเดอร์แท่งถัดไป:** `{target_time_str}` (M1)\n\n"
             f"🔥 **ทิศทางคำสั่ง:** **{dir_emoji}**\n\n"
             f"📊 **สถานะเทรนด์:** `{status}`\n"
@@ -189,8 +203,8 @@ def handle_start(message):
     
     bot.reply_to(
         message, 
-        "🚀 **TITAN AUTO-PILOT ACTIVATED (NEW TOKEN)** 🚀\n"
-        "เชื่อมต่อบอทตัวใหม่และเปิดระบบส่งสัญญาณออโต้ทุกแท่ง M1 เรียบร้อย!", 
+        "🚀 **TITAN AUTO-PILOT v6.0 ACTIVATED** 🚀\n"
+        "แก้บั๊กล็อกคู่เงินเรียบร้อย สแกนทั้ง 21 คู่ + ล็อกตามเทรนด์ 100% ไม่ส่งสวนทางเด็ดขาด!", 
         parse_mode="Markdown"
     )
 
