@@ -41,24 +41,22 @@ best_autopilot_cache = {
     "symbol": "",
     "label": "",
     "direction": "NONE",
-    "status": "SMART_BALANCE_ACTIVE",
+    "status": "PRO_MOMENTUM_ACTIVE",
     "score": 0
 }
 
 def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
-def fetch_kline(symbol, interval="1m", limit=30):
+def fetch_kline(symbol, interval="1m", limit=35):
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
         res = requests.get(url, timeout=2.5)
         if res.status_code == 200:
             raw = res.json()
             df = pd.DataFrame(raw, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'])
-            df['close'] = df['close'].astype(float)
-            df['open'] = df['open'].astype(float)
-            df['high'] = df['high'].astype(float)
-            df['low'] = df['low'].astype(float)
+            for col in ['open', 'high', 'low', 'close']:
+                df[col] = df[col].astype(float)
             return df
     except Exception:
         pass
@@ -69,10 +67,8 @@ def fetch_kline(symbol, interval="1m", limit=30):
         if res.status_code == 200:
             raw = res.json()
             df = pd.DataFrame(raw, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'])
-            df['close'] = df['close'].astype(float)
-            df['open'] = df['open'].astype(float)
-            df['high'] = df['high'].astype(float)
-            df['low'] = df['low'].astype(float)
+            for col in ['open', 'high', 'low', 'close']:
+                df[col] = df[col].astype(float)
             return df
     except Exception:
         pass
@@ -80,35 +76,45 @@ def fetch_kline(symbol, interval="1m", limit=30):
     return None
 
 def analyze_autopilot(symbol):
-    df = fetch_kline(symbol, "1m", 30)
-    if df is None or len(df) < 20:
+    df = fetch_kline(symbol, "1m", 35)
+    if df is None or len(df) < 25:
         return "NONE", 0, "DATA_ERROR"
 
+    # คำนวณค่าทางเทคนิค EMA และ MACD
     df['ema_10'] = df['close'].ewm(span=10, adjust=False).mean()
     df['ema_20'] = df['close'].ewm(span=20, adjust=False).mean()
+    
+    df['ema_12'] = df['close'].ewm(span=12, adjust=False).mean()
+    df['ema_26'] = df['close'].ewm(span=26, adjust=False).mean()
+    df['macd'] = df['ema_12'] - df['ema_26']
+    df['signal'] = df['macd'].ewm(span=9, adjust=False).mean()
+    df['hist'] = df['macd'] - df['signal']
 
     c = float(df['close'].iloc[-2])
     o = float(df['open'].iloc[-2])
-    h = float(df['high'].iloc[-2])
-    l = float(df['low'].iloc[-2])
     ema10 = float(df['ema_10'].iloc[-2])
     ema20 = float(df['ema_20'].iloc[-2])
+    macd_hist = float(df['hist'].iloc[-2])
 
+    # คำนวณคะแนนความแรง (PTS) ยิ่งห่างเส้นยิ่งคะแนนพุ่งสูงตามสไตล์ High-Momentum
     distance_score = int((abs(c - ema20) / (ema20 + 1e-9)) * 100000)
 
-    # กรองเฉพาะแท่งเทียนที่ไม่มีพลัง (บอดี้เล็กจิ๋ว ไซด์เวย์เสี่ยงโดนตบแบบเคส 21 PTS) ออกไปเบาๆ
-    body_size = abs(c - o)
-    total_range = h - l
-    if total_range > 0 and (body_size / total_range) < 0.20: # กรองเฉพาะแท่งจิ๋วจริงๆ ออก
-        return "NONE", distance_score, "WEAK_SIDEWAY"
+    # เพิ่มโบนัสคะแนนถ้า MACD สนับสนุนทิศทาง
+    direction = "NONE"
+    status_msg = "SIDEWAY"
 
-    # เช็คทิศทางเทรนด์ EMA แบบต่อเนื่องเพื่อให้สัญญาณมาตลอด
     if c < ema10 and c < ema20:
-        return "PUT", distance_score, "DOWNTREND MOMENTUM"
+        direction = "PUT"
+        status_msg = "HIGH POWER DOWNTREND"
+        if macd_hist < 0:
+            distance_score += 30  # โบนัสเพิ่มความมั่นใจเมื่อ MACD แดงสอดคล้อง
     elif c > ema10 and c > ema20:
-        return "CALL", distance_score, "UPTREND MOMENTUM"
-    
-    return "NONE", distance_score, "SIDEWAY"
+        direction = "CALL"
+        status_msg = "HIGH POWER UPTREND"
+        if macd_hist > 0:
+            distance_score += 30  # โบนัสเพิ่มความมั่นใจเมื่อ MACD เขียวสอดคล้อง
+
+    return direction, distance_score, status_msg
 
 def background_scanner():
     global best_autopilot_cache
@@ -121,6 +127,7 @@ def background_scanner():
 
             for sym in SYMBOLS.keys():
                 direction, score, status = analyze_autopilot(sym)
+                # เลือกตัวที่คะแนนสูงสุดเสมอ เพื่อให้ได้ตัวที่แรงที่สุดและส่งสัญญาณต่อเนื่องทุกนาที
                 if score > highest_score and direction != "NONE":
                     highest_score = score
                     top_sym = sym
@@ -146,7 +153,7 @@ def send_auto_signal(chat_id):
     try:
         now_time = time.time()
         
-        # Cooldown 60 วินาที ส่งต่อเนื่องทุกแท่งเทียน
+        # Cooldown 60 วินาที เพื่อให้ส่งสัญญาณต่อเนื่องทุกแท่งเทียน
         if now_time - last_global_signal_time < 60:
             return
 
@@ -172,20 +179,20 @@ def send_auto_signal(chat_id):
         btn_label = "CALL" if is_buy else "PUT"
 
         card_text = (
-            f"⚡ **TITAN AUTO-PILOT (Smart Balance)** ⚡\n"
+            f"⚡ **TITAN AUTO-PILOT (Pro-Momentum Mode)** ⚡\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🥊 **การเดินเงิน:** `ไม้ที่ {step}`\n"
             f"🎯 **คู่ตามเทรนด์:** `{label}`\n"
             f"⏱️ **เข้าออเดอร์แท่งถัดไป:** `{target_time_str}` (M1)\n\n"
             f"🔥 **ทิศทางคำสั่ง:** **{dir_emoji}**\n\n"
             f"📊 **สถานะเทรนด์:** `{status}`\n"
-            f"🛡️ **Score Strength:** `{score} PTS`\n"
+            f"🛡️ **Score Strength:** `{score} PTS` *(กำลังความแรงสูงสุด)*\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"⏱️ *Cooldown: ส่งสัญญาณต่อเนื่องทุกแท่งเทียน*"
         )
 
         markup = InlineKeyboardMarkup(row_width=1)
-        markup.add(InlineKeyboardButton(f"⚡ SMART SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
+        markup.add(InlineKeyboardButton(f"⚡ PRO SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
         markup.add(
             InlineKeyboardButton("💎 ชนะไม้ 1", callback_data=f"res_win1_{sym}"),
             InlineKeyboardButton("🥈 ชนะไม้ 2", callback_data=f"res_win2_{sym}"),
@@ -219,8 +226,8 @@ def handle_start(message):
     
     bot.reply_to(
         message, 
-        "🚀 **TITAN AUTO-PILOT SMART BALANCE ACTIVATED** 🚀\n"
-        "สัญญาณวิ่งส่งต่อเนื่องทุกแท่งเทียน พร้อมระบบกรองแท่งจิ๋ว/ไซด์เวย์ไร้พลังออก ป้องกันเคสโดนตบซ้ำซ้อน!", 
+        "🚀 **TITAN AUTO-PILOT PRO-MOMENTUM ACTIVATED** 🚀\n"
+        "เพิ่มระบบกรองเสริม MACD หนุนความแรง + เปิดโหมด High-Momentum จัดเต็ม คะแนนยิ่งเยอะยิ่งจัดหนัก สัญญาณวิ่งมารัวๆ ทุกนาทีเต็มระบบ!", 
         parse_mode="Markdown"
     )
 
@@ -228,7 +235,7 @@ def handle_start(message):
 def handle_callbacks(call):
     chat_id = call.message.chat.id
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ Smart Balance Active")
+        bot.answer_callback_query(call.id, "⚡ Pro-Momentum Active")
         return
     if call.data.startswith("res_"):
         parts = call.data.split("_")
