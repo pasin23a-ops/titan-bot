@@ -11,7 +11,16 @@ bot = telebot.TeleBot(BOT_TOKEN)
 
 active_chat_ids = set()
 user_martingale_step = {}
-active_menu_messages = {}
+last_global_signal_time = 0 
+
+# Cache สำหรับเก็บคู่ที่แข็งแกร่งที่สุดจากการสแกนระดับ Quant
+best_predator_cache = {
+    "symbol": "DYDXUSDT",
+    "label": "DYDX(OTC)",
+    "direction": "CALL",
+    "status": "INITIALIZING",
+    "score": 0
+}
 
 SYMBOLS = {
     "DYDXUSDT": "DYDX(OTC)",
@@ -40,7 +49,7 @@ SYMBOLS = {
 def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
-def fetch_kline(symbol, interval="1m", limit=30):
+def fetch_kline(symbol, interval="1m", limit=35):
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
         res = requests.get(url, timeout=3)
@@ -51,57 +60,124 @@ def fetch_kline(symbol, interval="1m", limit=30):
             df['open'] = df['open'].astype(float)
             df['high'] = df['high'].astype(float)
             df['low'] = df['low'].astype(float)
+            df['volume'] = df['volume'].astype(float)
             return df
     except Exception:
         pass
     return None
 
-def analyze_symbol(symbol):
-    df = fetch_kline(symbol, "1m", 30)
-    if df is None or len(df) < 20:
-        return "CALL", 40, "NEUTRAL"
+def quant_predator_analyze(symbol):
+    """ระบบคัดกรองมหาโหด 3 ชั้น (EMA Alignment + Volume Surge + Candle Structure)"""
+    df = fetch_kline(symbol, "1m", 35)
+    if df is None or len(df) < 25:
+        return "CALL", -9999, "DATA_ERROR"
 
     df['ema_10'] = df['close'].ewm(span=10, adjust=False).mean()
     df['ema_20'] = df['close'].ewm(span=20, adjust=False).mean()
+    df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()
 
-    c = float(df['close'].iloc[-2])
     o = float(df['open'].iloc[-2])
+    c = float(df['close'].iloc[-2])
+    h = float(df['high'].iloc[-2])
+    l = float(df['low'].iloc[-2])
+    
     ema10 = float(df['ema_10'].iloc[-2])
     ema20 = float(df['ema_20'].iloc[-2])
+    ema50 = float(df['ema_50'].iloc[-2])
+    
     vol = float(df['volume'].iloc[-2])
     avg_vol = df['volume'].iloc[-12:-2].mean()
 
-    score = 50
-    # เช็กโครงสร้างเทรนด์ตามเงื่อนไขที่แท้จริง
+    candle_range = h - l + 1e-9
+    body_size = abs(c - o)
+    body_ratio = body_size / candle_range
+
+    # 1. กรองโดจิ / แท่งเทียนอ่อนแรง
+    if body_ratio < 0.30:
+        return "NONE", -5000, "FILTER: DOJI_WEAK_BODY"
+
+    score = 0
+
+    # 2. กรองเทรนด์ขาขึ้นเข้มงวด (Strict Bullish Alignment)
     if c > ema10 and ema10 > ema20 and c > o:
-        score = 80
+        score += 1000
+        if ema20 > ema50:
+            score += 500  # เทรนด์ใหญ่สนับสนุน
         if vol > avg_vol:
-            score = 92
-        return "CALL", score, "STRONG UPTREND"
+            score += 300  # วอลลุ่มซัพพอร์ต
+        upper_wick = (h - c) / candle_range
+        if upper_wick < 0.20:
+            score += 200  # ไม่มีแรงต้านส่วนบน
+        return "CALL", score, "PURE_BULLISH_MOMENTUM"
+
+    # 3. กรองเทรนด์ขาลงเข้มงวด (Strict Bearish Alignment)
     elif c < ema10 and ema10 < ema20 and c < o:
-        score = 80
+        score += 1000
+        if ema20 < ema50:
+            score += 500  # เทรนด์ใหญ่สนับสนุน
         if vol > avg_vol:
-            score = 92
-        return "PUT", score, "STRONG DOWNTREND"
+            score += 300  # วอลลุ่มซัพพอร์ต
+        lower_wick = (c - l) / candle_range
+        if lower_wick < 0.20:
+            score += 200  # ไม่มีแรงรับส่วนล่าง
+        return "PUT", score, "PURE_BEARISH_MOMENTUM"
+
+    # 4. Fallback ป้องกันสัญญาณขาดหาย (อิงตาม EMA หลัก)
+    fallback_score = int((abs(c - ema20) / (ema20 + 1e-9)) * 5000)
+    if c >= ema20:
+        return "CALL", fallback_score, "FLOW_UPTREND"
     else:
-        # ถ้าไม่อยู่ในเทรนด์ชัดเจน ให้คะแนนต่ำกว่า 70% จะได้แสดงเป็นสีแดง
-        direction = "CALL" if c >= ema20 else "PUT"
-        return direction, 55, "WEAK / SIDEWAY"
+        return "PUT", fallback_score, "FLOW_DOWNTREND"
 
-def build_market_menu():
-    markup = InlineKeyboardMarkup(row_width=2)
-    for sym, label in SYMBOLS.items():
-        _, score, _ = analyze_symbol(sym)
-        # 🟢 เขียวเฉพาะเมื่อคะแนน >= 70% เท่านั้น / ต่ำกว่านั้น 🔴 แดง
-        dot = "🟢" if score >= 70 else "🔴"
-        btn_text = f"{dot} {label} ({score}%)"
-        markup.add(InlineKeyboardButton(btn_text, callback_data=f"select_{sym}"))
-    return markup
+def background_quant_scanner():
+    """สแกนตลอดเวลาเพื่อเฟ้นหาคู่ที่ดีที่สุดแบบ Real-time"""
+    global best_predator_cache
+    while True:
+        try:
+            top_sym = None
+            top_dir = "CALL"
+            top_status = "QUANT_SCANNING"
+            highest_score = -99999
 
-def send_signal_for_symbol(chat_id, sym):
+            for sym in SYMBOLS.keys():
+                direction, score, status = quant_predator_analyze(sym)
+                if score > highest_score:
+                    highest_score = score
+                    top_sym = sym
+                    top_dir = direction
+                    top_status = status
+
+            if not top_sym:
+                top_sym = "DYDXUSDT"
+
+            best_predator_cache = {
+                "symbol": top_sym,
+                "label": SYMBOLS.get(top_sym, top_sym),
+                "direction": top_dir,
+                "status": top_status,
+                "score": highest_score
+            }
+            time.sleep(2)
+        except Exception as e:
+            print(f"Scanner Error: {e}")
+            time.sleep(3)
+
+def send_quant_signal(chat_id):
+    global last_global_signal_time
     try:
-        label = SYMBOLS.get(sym, sym)
-        direction, score, status = analyze_symbol(sym)
+        now_time = time.time()
+        
+        # Cooldown ป้องกันการยิงเบิ้ลในแท่งเดียวกัน (60 วินาที)
+        if now_time - last_global_signal_time < 60:
+            return
+
+        sym = best_predator_cache["symbol"]
+        label = best_predator_cache["label"]
+        direction = best_predator_cache["direction"]
+        status = best_predator_cache["status"]
+        score = best_predator_cache["score"]
+
+        last_global_signal_time = now_time
 
         step = user_martingale_step.get(chat_id, 1)
         now = get_thai_time()
@@ -109,21 +185,25 @@ def send_signal_for_symbol(chat_id, sym):
         target_time_str = target_time.strftime('%H:%M')
 
         is_buy = (direction == "CALL")
-        dir_emoji = "⬆️ BUY 🟢" if is_buy else "⬇️ SELL 🔴"
+        dir_emoji = "🟢 BUY (CALL) 🟢" if is_buy else "🔴 SELL (PUT) 🔴"
         btn_label = "CALL" if is_buy else "PUT"
 
+        # การ์ดสัญญาณสไตล์ Quant Predator
         card_text = (
-            f"👑 **TITAN MANUAL SELECTOR 👑 M1**\n"
-            f"⚡ **[ไม้ {step}]**\n\n"
-            f"🎯 **คู่ที่คุณเลือก:** `{label}`\n"
-            f"📈 **Timeframe:** `M1 (Threshold Filter)`\n"
-            f"⌚ **เข้าออเดอร์เวลา:** `{target_time_str}`\n"
-            f"🚀 **ทิศทาง:** **{dir_emoji}**\n\n"
-            f"🛡️ **สถานะความมั่นใจ:** `{status} (Score: {score}%)`"
+            f"⚡ **TITAN QUANT-PREDATOR v4.0** ⚡\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🥊 **การจัดการเดินเงิน:** `ไม้ที่ {step}`\n"
+            f"🎯 **สินทรัพย์ท็อปสุดรอบนี้:** `{label}`\n"
+            f"⏱️ **เข้าออเดอร์แท่งถัดไป:** `{target_time_str}` (M1)\n\n"
+            f"🔥 **คำสั่งซื้อขาย:** **{dir_emoji}**\n\n"
+            f"📊 **ระบบคัดกรอง:** `{status}`\n"
+            f"🛡️ **Predator Score:** `{score} PTS`\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"⚠️ *ระบบรันสแกนอัตโนมัติ ออกสัญญาณตรงเวลาทุกนาที*"
         )
 
         markup = InlineKeyboardMarkup(row_width=1)
-        markup.add(InlineKeyboardButton(f"🔥 EXECUTE {btn_label} 🔥", callback_data="do_nothing"))
+        markup.add(InlineKeyboardButton(f"⚡ EXECUTE {btn_label} NOW ⚡", callback_data="do_nothing"))
         markup.add(
             InlineKeyboardButton("💎 ชนะไม้ 1", callback_data=f"res_win1_{sym}"),
             InlineKeyboardButton("🥈 ชนะไม้ 2", callback_data=f"res_win2_{sym}"),
@@ -134,81 +214,55 @@ def send_signal_for_symbol(chat_id, sym):
     except Exception as e:
         print(f"Send Error: {e}")
 
-@bot.message_handler(commands=['start', 'pair', 'menu'])
-def handle_menu(message):
+def auto_broadcaster():
+    """ส่งสัญญาณอัตโนมัติตรงวินาทีที่ 30 ของทุกๆ นาที"""
+    last_sent_minute = -1
+    while True:
+        try:
+            now = get_thai_time()
+            if now.second == 30 and now.minute != last_sent_minute:
+                last_sent_minute = now.minute
+                for cid in list(active_chat_ids):
+                    send_quant_signal(cid)
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"Loop Error: {e}")
+            time.sleep(2)
+
+@bot.message_handler(commands=['start', 'scan', 'run'])
+def handle_start(message):
     chat_id = message.chat.id
     active_chat_ids.add(chat_id)
     if chat_id not in user_martingale_step:
         user_martingale_step[chat_id] = 1
-
-    menu_markup = build_market_menu()
-    sent_msg = bot.reply_to(
+    
+    bot.reply_to(
         message, 
-        "⚡ **TITAN LIVE MARKET RADAR (70% THRESHOLD)** ⚡\n"
-        "เกณฑ์การแสดงผลสี:\n"
-        "🟢 = มั่นใจ (Score $\ge$ 70%)\n"
-        "🔴 = ไม่มั่นใจ / ไซด์เวย์ (Score < 70%)\n\n"
-        "กดเลือกคู่ที่ต้องการเทรดด้านล่างได้เลยครับ:", 
-        reply_markup=menu_markup, 
+        "🔥 **TITAN QUANT-PREDATOR ACTIVATED** 🔥\n"
+        "เปิดระบบสแกนคัดกรองมหาโหด + ยิงสัญญาณตามเทรนด์อัตโนมัติเรียบร้อย!\n"
+        "สัญญาณจะเด้งเข้าแชททุกๆ นาทีครับ", 
         parse_mode="Markdown"
     )
-    active_menu_messages[chat_id] = sent_msg.message_id
-
-def auto_menu_refresher():
-    last_minute = -1
-    while True:
-        try:
-            now = get_thai_time()
-            if now.second == 5 and now.minute != last_minute:
-                last_minute = now.minute
-                new_markup = build_market_menu()
-                for cid in list(active_chat_ids):
-                    if cid in active_menu_messages:
-                        try:
-                            bot.edit_message_text(
-                                chat_id=cid,
-                                message_id=active_menu_messages[cid],
-                                text=(
-                                    "⚡ **TITAN LIVE MARKET RADAR (70% THRESHOLD)** ⚡\n"
-                                    f"🔄 *อัปเดตสดล่าสุดรอบเวลา {now.strftime('%H:%M:%S')}*\n\n"
-                                    "กดเลือกคู่ที่ต้องการเทรดด้านล่างได้เลยครับ:"
-                                ),
-                                reply_markup=new_markup,
-                                parse_mode="Markdown"
-                            )
-                        except Exception:
-                            pass
-            time.sleep(1)
-        except Exception as e:
-            print(f"Refresher Error: {e}")
-            time.sleep(3)
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     chat_id = call.message.chat.id
-    
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ Signal Locked")
+        bot.answer_callback_query(call.id, "⚡ Signal Executed")
         return
-
-    if call.data.startswith("select_"):
-        sym = call.data.replace("select_", "")
-        bot.answer_callback_query(call.id, f"✅ เลือก {SYMBOLS.get(sym, sym)} แล้ว!")
-        send_signal_for_symbol(chat_id, sym)
-        return
-
     if call.data.startswith("res_"):
         parts = call.data.split("_")
         res_type = parts[1]
         if res_type in ["win1", "win2", "win3"]:
             user_martingale_step[chat_id] = 1
-            bot.answer_callback_query(call.id, "💎 Reset สู่ไม้ 1")
+            bot.answer_callback_query(call.id, "💎 WIN! Reset เป็นไม้ 1 เรียบร้อย")
         elif res_type == "loss":
             step = user_martingale_step.get(chat_id, 1)
             user_martingale_step[chat_id] = 1 if step >= 3 else step + 1
-            bot.answer_callback_query(call.id, f"⚠️ ปรับสู่ไม้ {user_martingale_step[chat_id]}")
+            bot.answer_callback_query(call.id, f"⚠️ LOSS! ปรับเพิ่มเงินเป็นไม้ {user_martingale_step[chat_id]}")
 
-threading.Thread(target=auto_menu_refresher, daemon=True).start()
+threading.Thread(target=background_quant_scanner, daemon=True).start()
+threading.Thread(target=auto_broadcaster, daemon=True).start()
 
 while True:
     try:
