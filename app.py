@@ -43,7 +43,7 @@ best_autopilot_cache = {
     "symbol": "",
     "label": "",
     "direction": "NONE",
-    "status": "TRUE_RISK_GUARD",
+    "status": "ULTRA_SHIELD_ACTIVE",
     "score": 0,
     "is_risky": False
 }
@@ -97,27 +97,31 @@ def analyze_autopilot(symbol):
 
     distance_score = int((abs(c - ema20) / (ema20 + 1e-9)) * 100000)
 
-    # คำนวณแนวรับแนวต้านจริงจาก Swing High / Low (ย้อนหลัง 20 แท่ง เพื่อหาแนวต้านสำคัญจริงๆ)
+    # ตัดคะแนนกระชากเกิน 150 PTS ทิ้งทันที ป้องกันเคส Overextended
+    if distance_score > 150:
+        return "NONE", distance_score, "EXHAUSTION_TRAP", False
+
     recent_high = df['high'].iloc[-20:-2].max()
     recent_low = df['low'].iloc[-20:-2].min()
     
     is_risky = False
     status_msg = "SIDEWAY"
+    direction = "NONE"
 
+    # [ULTRA SHIELD] เช็คสีแท่งเทียนต้องตรงกับทิศทาง (ห้ามสวนแท่งเขียว/แดงเด็ดขาด)
+    # PUT: ต้องเป็นเทรนด์ขาลง + แท่งก่อนหน้าต้องเป็น "แท่งแดง" (Close < Open) เท่านั้น
     if c < o and c < ema10 and c < ema20:
         direction = "PUT"
-        status_msg = "STRICT DOWNTREND"
-        # เช็คความเสี่ยงเฉพาะตอนที่ราคาจ่อติดแนวรับหลักจริงๆ (< 0.08% ของช่วงราคา)
+        status_msg = "STRICT DOWNTREND (RED CANDLE)"
         if abs(c - recent_low) / (c + 1e-9) < 0.0008:
             is_risky = True
+
+    # CALL: ต้องเป็นเทรนด์ขาขึ้น + แท่งก่อนหน้าต้องเป็น "แท่งเขียว" (Close > Open) เท่านั้น
     elif c > o and c > ema10 and c > ema20:
         direction = "CALL"
-        status_msg = "STRICT UPTREND"
-        # เช็คความเสี่ยงเฉพาะตอนที่ราคาจ่อติดแนวต้านหลักจริงๆ (< 0.08% ของช่วงราคา)
+        status_msg = "STRICT UPTREND (GREEN CANDLE)"
         if abs(recent_high - c) / (c + 1e-9) < 0.0008:
             is_risky = True
-    else:
-        direction = "NONE"
 
     return direction, distance_score, status_msg, is_risky
 
@@ -125,7 +129,6 @@ def background_scanner():
     global best_autopilot_cache
     while True:
         try:
-            # 1. เช็คปลดล็อกคู่ที่หายเสี่ยงแล้ว
             for cid in list(resting_symbols.keys()):
                 for sym in list(resting_symbols[cid]):
                     _, _, _, is_risky = analyze_autopilot(sym)
@@ -150,7 +153,6 @@ def background_scanner():
 
             available_candidates = [c for c in candidates if c["symbol"] not in active_resting]
 
-            # ให้ความสำคัญกับคู่ที่ "ไม่เสี่ยง" ก่อนเสมอ
             safe_candidates = [c for c in available_candidates if not c["is_risky"]]
             target_list = safe_candidates if safe_candidates else available_candidates
 
@@ -165,6 +167,15 @@ def background_scanner():
                     "score": top["score"],
                     "is_risky": top["is_risky"]
                 }
+            else:
+                best_autopilot_cache = {
+                    "symbol": "",
+                    "label": "",
+                    "direction": "NONE",
+                    "status": "WAITING_SAFE_SETUP",
+                    "score": 0,
+                    "is_risky": False
+                }
             
             time.sleep(1)
         except Exception as e:
@@ -175,6 +186,8 @@ def send_auto_signal(chat_id):
     global last_global_signal_time
     try:
         now_time = time.time()
+        
+        # [COOLDOWN CHECK] ล็อคบังคับห่างกันอย่างน้อย 60 วินาที
         if now_time - last_global_signal_time < 60:
             return
 
@@ -203,14 +216,13 @@ def send_auto_signal(chat_id):
         dir_emoji = "🟢 BUY (CALL) 🟢" if is_buy else "🔴 SELL (PUT) 🔴"
         btn_label = "CALL" if is_buy else "PUT"
 
-        # ขึ้นเตือนเฉพาะคู่ที่ชนแนวรับแนวต้านจริงๆ เท่านั้น
         risk_warning_text = (
             "⚠️ **แจ้งเตือน: คู่นี้มีความเสี่ยงสูง (จ่อแนวรับ/แนวต้านสำคัญ)!**\n"
             "👉 *หลังจากชนะไม้นี้แล้ว ให้หยุดพักคู่นี้ชั่วคราวเพื่อรอคำนวณใหม่*\n"
         ) if is_risky else ""
 
         card_text = (
-            f"⚡ **TITAN AUTO-PILOT (True Risk Guard)** ⚡\n"
+            f"⚡ **TITAN AUTO-PILOT (v7.1 Ultra-Shield)** ⚡\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"{risk_warning_text}"
             f"🥊 **การเดินเงิน:** `ไม้ที่ {step}`\n"
@@ -220,13 +232,13 @@ def send_auto_signal(chat_id):
             f"📊 **สถานะเทรนด์:** `{status}`\n"
             f"🛡️ **Score Strength:** `{score} PTS`\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"⏱️ *Cooldown: พักระบบ 1 แท่งเทียนอัตโนมัติ*"
+            f"⏱️ *Cooldown: บังคับพักระบบ 60 วินาทีเรียบร้อย*"
         )
 
         risk_flag = "risky" if is_risky else "safe"
 
         markup = InlineKeyboardMarkup(row_width=1)
-        markup.add(InlineKeyboardButton(f"⚡ AUTO SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
+        markup.add(InlineKeyboardButton(f"⚡ ULTRA SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
         markup.add(
             InlineKeyboardButton("💎 ชนะไม้ 1", callback_data=f"res_win1_{sym}_{risk_flag}"),
             InlineKeyboardButton("🥈 ชนะไม้ 2", callback_data=f"res_win2_{sym}_{risk_flag}"),
@@ -261,8 +273,8 @@ def handle_start(message):
     
     bot.reply_to(
         message, 
-        "🚀 **TITAN AUTO-PILOT ACTIVATED** 🚀\n"
-        "ปรับจูนตัวกรองแนวรับแนวต้านแบบแม่นยำ ไม่แจ้งเตือนพร่ำเพรื่อ เตือนเฉพาะคู่ที่เสี่ยงจริงๆ เท่านั้น!", 
+        "🚀 **TITAN AUTO-PILOT v7.1 ACTIVATED** 🚀\n"
+        "เปิดระบบ Ultra-Shield ปิดช่องโหว่สวนแท่งเทียน + จำกัดเพดานคะแนนไม่ให้เกิน 150 PTS + ล็อค Cooldown 60 วินาทีสมบูรณ์แบบ!", 
         parse_mode="Markdown"
     )
 
@@ -270,7 +282,7 @@ def handle_start(message):
 def handle_callbacks(call):
     chat_id = call.message.chat.id
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ True Risk Guard Active")
+        bot.answer_callback_query(call.id, "⚡ Ultra-Shield Active")
         return
     
     if call.data.startswith("res_"):
@@ -287,11 +299,11 @@ def handle_callbacks(call):
                     resting_symbols[chat_id] = set()
                 resting_symbols[chat_id].add(sym)
                 
-                bot.answer_callback_query(call.id, "💎 WIN! สั่งพักคู่นี้ชั่วคราวตามความเสี่ยงจริง")
+                bot.answer_callback_query(call.id, "💎 WIN! สั่งพักคู่นี้ชั่วคราวตามเกณฑ์ความเสี่ยง")
                 bot.send_message(
                     chat_id, 
                     f"⏸️ **RESTING PAIR:** ชนะในคู่ที่มีความเสี่ยงสูง (`{SYMBOLS.get(sym, sym)}`) เรียบร้อย!\n"
-                    f"บอทพักคู่นี้ชั่วคราวและกำลังเฝ้าระวังเบื้องหลัง ทันทีที่กราฟหลุดพ้นแนวรับแนวต้านและ **หายเสี่ยง** บอทจะดึงกลับมาส่งสัญญาณต่อให้อัตโนมัติครับ!"
+                    f"บอทพักคู่นี้ชั่วคราวและกำลังเฝ้าระวังเบื้องหลัง ทันทีที่กราฟหายเสี่ยง บอทจะดึงกลับมาคำนวณส่งสัญญาณต่อให้อัตโนมัติครับ!"
                 )
             else:
                 bot.answer_callback_query(call.id, "💎 WIN! Reset สู่ไม้ 1")
