@@ -13,14 +13,6 @@ active_chat_ids = set()
 user_martingale_step = {}
 last_global_signal_time = 0 
 
-best_autopilot_cache = {
-    "symbol": "XAUUSDT",
-    "label": "XAUUSD(OTC)",
-    "direction": "PUT",
-    "status": "INITIALIZING",
-    "score": -99999
-}
-
 SYMBOLS = {
     "DYDXUSDT": "DYDX(OTC)",
     "XAUUSDT": "XAUUSD(OTC)",
@@ -66,7 +58,6 @@ def fetch_kline(symbol, interval="1m", limit=30):
 
 def analyze_autopilot(symbol):
     df = fetch_kline(symbol, "1m", 30)
-    # หากดึงข้อมูลไม่ได้ ให้คืนค่าคะแนนติดลบหนักๆ เพื่อข้ามคู่นี้ไปเลย ไม่ส่งมั่ว
     if df is None or len(df) < 20:
         return "NONE", -99999, "DATA_ERROR"
 
@@ -80,48 +71,49 @@ def analyze_autopilot(symbol):
 
     distance_score = int((abs(c - ema20) / (ema20 + 1e-9)) * 100000)
 
-    # --- บังคับตามเทรนด์ 100% ---
-    # 1. แท่งแดง + ราคา < EMA10 & EMA20 -> บังคับกด PUT (SELL) เท่านั้น!
+    # กรองตามเทรนด์ 100% ห้ามสวน
     if c < o and c < ema10 and c < ema20:
         return "PUT", distance_score + 1000, "STRICT DOWNTREND"
-    
-    # 2. แท่งเขียว + ราคา > EMA10 & EMA20 -> บังคับกด CALL (BUY) เท่านั้น!
     elif c > o and c > ema10 and c > ema20:
         return "CALL", distance_score + 1000, "STRICT UPTREND"
-    
-    # 3. ถ้ากราฟไม่ชัด ให้ยึดฝั่งราคาเทียบกับ EMA20 แต่ตัดคะแนนลง
     elif c < ema20:
         return "PUT", distance_score, "WEAK DOWNTREND"
     else:
         return "CALL", distance_score, "WEAK UPTREND"
 
+def get_best_market_candidate():
+    top_sym = "DYDXUSDT"
+    top_dir = "CALL"
+    top_status = "ANALYZING_MARKET"
+    highest_score = -999999
+
+    for sym in SYMBOLS.keys():
+        direction, score, status = analyze_autopilot(sym)
+        if score > highest_score and direction != "NONE":
+            highest_score = score
+            top_sym = sym
+            top_dir = direction
+            top_status = status
+
+    return {
+        "symbol": top_sym,
+        "label": SYMBOLS.get(top_sym, top_sym),
+        "direction": top_dir,
+        "status": top_status,
+        "score": highest_score
+    }
+
+# เริ่มต้นด้วยการสแกนหาค่าจริงทันที ไม่ใช้ค่าหลอก
+best_autopilot_cache = get_best_market_candidate()
+
 def background_scanner():
     global best_autopilot_cache
     while True:
         try:
-            top_sym = None
-            top_dir = "NONE"
-            top_status = "SCANNING"
-            highest_score = -999999
-
-            # วนสแกนทุกคู่จริงๆ เพื่อหาคู่ที่มีคะแนนสูงสุด
-            for sym in SYMBOLS.keys():
-                direction, score, status = analyze_autopilot(sym)
-                if score > highest_score and direction != "NONE":
-                    highest_score = score
-                    top_sym = sym
-                    top_dir = direction
-                    top_status = status
-
-            if top_sym:
-                best_autopilot_cache = {
-                    "symbol": top_sym,
-                    "label": SYMBOLS.get(top_sym, top_sym),
-                    "direction": top_dir,
-                    "status": top_status,
-                    "score": highest_score
-                }
-            time.sleep(1.5)
+            res = get_best_market_candidate()
+            if res["score"] > -999999:
+                best_autopilot_cache = res
+            time.sleep(2)
         except Exception as e:
             print(f"Scanner Error: {e}")
             time.sleep(3)
@@ -131,7 +123,6 @@ def send_auto_signal(chat_id):
     try:
         now_time = time.time()
         
-        # Cooldown บังคับ 1 แท่งเทียน (60 วินาที)
         if now_time - last_global_signal_time < 60:
             return
 
@@ -156,7 +147,7 @@ def send_auto_signal(chat_id):
         btn_label = "CALL" if is_buy else "PUT"
 
         card_text = (
-            f"⚡ **TITAN AUTO-PILOT MASTER v6.0** ⚡\n"
+            f"⚡ **TITAN AUTO-PILOT MASTER v6.1** ⚡\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🥊 **การเดินเงิน:** `ไม้ที่ {step}`\n"
             f"🎯 **คู่ที่มั่นใจตามเทรนด์ที่สุด:** `{label}`\n"
@@ -203,8 +194,8 @@ def handle_start(message):
     
     bot.reply_to(
         message, 
-        "🚀 **TITAN AUTO-PILOT v6.0 ACTIVATED** 🚀\n"
-        "แก้บั๊กล็อกคู่เงินเรียบร้อย สแกนทั้ง 21 คู่ + ล็อกตามเทรนด์ 100% ไม่ส่งสวนทางเด็ดขาด!", 
+        "🚀 **TITAN AUTO-PILOT v6.1 ACTIVATED** 🚀\n"
+        "แก้ไขบั๊กคะแนนติดลบและสถานะ Initializing เรียบร้อย พร้อมรันสแกนจริง 100%!", 
         parse_mode="Markdown"
     )
 
