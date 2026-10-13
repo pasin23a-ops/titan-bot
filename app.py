@@ -37,13 +37,22 @@ SYMBOLS = {
     "XAGUSDT": "XAGUSD(OTC)"
 }
 
+best_autopilot_cache = {
+    "symbol": "",
+    "label": "",
+    "direction": "NONE",
+    "status": "WAITING_DATA",
+    "score": -999999
+}
+
 def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
 def fetch_kline(symbol, interval="1m", limit=30):
+    # ยิงผ่าน Binance API หลัก
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-        res = requests.get(url, timeout=3)
+        res = requests.get(url, timeout=2.5)
         if res.status_code == 200:
             raw = res.json()
             df = pd.DataFrame(raw, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'])
@@ -54,12 +63,28 @@ def fetch_kline(symbol, interval="1m", limit=30):
             return df
     except Exception:
         pass
+
+    # สำรอง: ยิงผ่าน Binance API US
+    try:
+        url = f"https://api.binance.us/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+        res = requests.get(url, timeout=2.5)
+        if res.status_code == 200:
+            raw = res.json()
+            df = pd.DataFrame(raw, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'])
+            df['close'] = df['close'].astype(float)
+            df['open'] = df['open'].astype(float)
+            df['high'] = df['high'].astype(float)
+            df['low'] = df['low'].astype(float)
+            return df
+    except Exception:
+        pass
+
     return None
 
 def analyze_autopilot(symbol):
     df = fetch_kline(symbol, "1m", 30)
     if df is None or len(df) < 20:
-        return "NONE", -99999, "DATA_ERROR"
+        return "NONE", -999999, "DATA_ERROR"
 
     df['ema_10'] = df['close'].ewm(span=10, adjust=False).mean()
     df['ema_20'] = df['close'].ewm(span=20, adjust=False).mean()
@@ -71,7 +96,7 @@ def analyze_autopilot(symbol):
 
     distance_score = int((abs(c - ema20) / (ema20 + 1e-9)) * 100000)
 
-    # กรองตามเทรนด์ 100% ห้ามสวน
+    # บังคับตามเทรนด์เด็ดขาด
     if c < o and c < ema10 and c < ema20:
         return "PUT", distance_score + 1000, "STRICT DOWNTREND"
     elif c > o and c > ema10 and c > ema20:
@@ -81,39 +106,32 @@ def analyze_autopilot(symbol):
     else:
         return "CALL", distance_score, "WEAK UPTREND"
 
-def get_best_market_candidate():
-    top_sym = "DYDXUSDT"
-    top_dir = "CALL"
-    top_status = "ANALYZING_MARKET"
-    highest_score = -999999
-
-    for sym in SYMBOLS.keys():
-        direction, score, status = analyze_autopilot(sym)
-        if score > highest_score and direction != "NONE":
-            highest_score = score
-            top_sym = sym
-            top_dir = direction
-            top_status = status
-
-    return {
-        "symbol": top_sym,
-        "label": SYMBOLS.get(top_sym, top_sym),
-        "direction": top_dir,
-        "status": top_status,
-        "score": highest_score
-    }
-
-# เริ่มต้นด้วยการสแกนหาค่าจริงทันที ไม่ใช้ค่าหลอก
-best_autopilot_cache = get_best_market_candidate()
-
 def background_scanner():
     global best_autopilot_cache
     while True:
         try:
-            res = get_best_market_candidate()
-            if res["score"] > -999999:
-                best_autopilot_cache = res
-            time.sleep(2)
+            top_sym = None
+            top_dir = "NONE"
+            top_status = "SCANNING"
+            highest_score = -999999
+
+            for sym in SYMBOLS.keys():
+                direction, score, status = analyze_autopilot(sym)
+                if score > highest_score and direction != "NONE" and score > 0:
+                    highest_score = score
+                    top_sym = sym
+                    top_dir = direction
+                    top_status = status
+
+            if top_sym and highest_score > 0:
+                best_autopilot_cache = {
+                    "symbol": top_sym,
+                    "label": SYMBOLS.get(top_sym, top_sym),
+                    "direction": top_dir,
+                    "status": top_status,
+                    "score": highest_score
+                }
+            time.sleep(1.5)
         except Exception as e:
             print(f"Scanner Error: {e}")
             time.sleep(3)
@@ -123,17 +141,20 @@ def send_auto_signal(chat_id):
     try:
         now_time = time.time()
         
+        # Cooldown 1 แท่งเทียน (60 วินาที)
         if now_time - last_global_signal_time < 60:
             return
 
         direction = best_autopilot_cache["direction"]
-        if direction == "NONE":
+        score = best_autopilot_cache["score"]
+
+        # SAFE-GUARD: ถ้าดึงข้อมูลไม่ได้ หรือคะแนนติดลบ ให้ข้าม ไม่ส่งสัญญาณมั่วเด็ดขาด
+        if direction == "NONE" or score <= 0:
             return
 
         sym = best_autopilot_cache["symbol"]
         label = best_autopilot_cache["label"]
         status = best_autopilot_cache["status"]
-        score = best_autopilot_cache["score"]
 
         last_global_signal_time = now_time
 
@@ -147,7 +168,7 @@ def send_auto_signal(chat_id):
         btn_label = "CALL" if is_buy else "PUT"
 
         card_text = (
-            f"⚡ **TITAN AUTO-PILOT MASTER v6.1** ⚡\n"
+            f"⚡ **TITAN AUTO-PILOT MASTER v6.2** ⚡\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🥊 **การเดินเงิน:** `ไม้ที่ {step}`\n"
             f"🎯 **คู่ที่มั่นใจตามเทรนด์ที่สุด:** `{label}`\n"
@@ -194,8 +215,8 @@ def handle_start(message):
     
     bot.reply_to(
         message, 
-        "🚀 **TITAN AUTO-PILOT v6.1 ACTIVATED** 🚀\n"
-        "แก้ไขบั๊กคะแนนติดลบและสถานะ Initializing เรียบร้อย พร้อมรันสแกนจริง 100%!", 
+        "🚀 **TITAN AUTO-PILOT v6.2 ACTIVATED** 🚀\n"
+        "เพิ่มระบบกันสัญญาณหลุดขยะ 100% ถ้าดึงข้อมูลไม่ได้จะไม่ส่งมั่วเด็ดขาด!", 
         parse_mode="Markdown"
     )
 
