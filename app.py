@@ -13,8 +13,7 @@ active_chat_ids = set()
 user_martingale_step = {}
 last_global_signal_time = 0 
 
-symbol_cooldowns = {}
-COOLDOWN_DURATION = 300  # คูดาวคู่ละ 5 นาที (300 วินาที)
+# [ลบการบล็อกรายคู่เหรียญออกแล้ว] อนุญาตให้สแกนและเลือกคู่ที่ดีที่สุดได้ทุกแท่งเทียนทันที
 
 SYMBOLS = {
     "DYDXUSDT": "DYDX(OTC)",
@@ -44,14 +43,14 @@ best_autopilot_cache = {
     "symbol": "",
     "label": "",
     "direction": "NONE",
-    "status": "ABSOLUTE_PRECISION_ACTIVE",
+    "status": "CONTINUOUS_FLOW_ACTIVE",
     "score": 0
 }
 
 def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
-def fetch_kline(symbol, interval="1m", limit=50):
+def fetch_kline(symbol, interval="1m", limit=40):
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
         res = requests.get(url, timeout=2.5)
@@ -87,12 +86,8 @@ def calculate_rsi(series, period=14):
     return rsi
 
 def analyze_autopilot(symbol):
-    current_time = time.time()
-    if symbol in symbol_cooldowns and current_time < symbol_cooldowns[symbol]:
-        return "NONE", -99999, "ON_COOLDOWN"
-
-    df = fetch_kline(symbol, "1m", 50)
-    if df is None or len(df) < 35:
+    df = fetch_kline(symbol, "1m", 40)
+    if df is None or len(df) < 30:
         return "NONE", 0, "DATA_ERROR"
 
     df['ema_10'] = df['close'].ewm(span=10, adjust=False).mean()
@@ -104,61 +99,42 @@ def analyze_autopilot(symbol):
     df['hist'] = df['macd'] - df['signal']
     df['rsi'] = calculate_rsi(df['close'], 14)
 
-    # ข้อมูลแท่งเทียนปัจจุบันและย้อนหลังเพื่อความแม่นยำสูงสุด
     c = float(df['close'].iloc[-2])
     o = float(df['open'].iloc[-2])
     h = float(df['high'].iloc[-2])
     l = float(df['low'].iloc[-2])
-    
-    prev_c = float(df['close'].iloc[-3])
-    prev_o = float(df['open'].iloc[-3])
-    prev_h = float(df['high'].iloc[-3])
-    prev_l = float(df['low'].iloc[-3])
-
     ema10 = float(df['ema_10'].iloc[-2])
     ema20 = float(df['ema_20'].iloc[-2])
     rsi_val = float(df['rsi'].iloc[-2])
     macd_hist = float(df['hist'].iloc[-2])
 
-    # ตรวจสอบความถูกต้องของ RSI แบบเข้มงวด ป้องกันค่าศูนย์หรือค่าผิดพลาด
-    if pd.isna(rsi_val) or rsi_val <= 5 or rsi_val >= 95:
-        return "NONE", 0, "RSI_INVALID_BLOCKED"
+    if pd.isna(rsi_val):
+        rsi_val = 50.0
 
-    # คำนวณระยะห่าง
     raw_distance = int((abs(c - ema20) / (ema20 + 1e-9)) * 100000)
 
+    # Smart Penalty ป้องกันเคสลากไส้แตก แต่ไม่บล็อกทิ้ง
     quality_score = raw_distance
     if raw_distance > 180:
         excess = raw_distance - 180
-        quality_score = max(10, 180 - (excess * 2))
-
-    # กรองแท่งเทียนจิ๋วไร้พลัง
-    body_size = abs(c - o)
-    total_range = h - l
-    if total_range > 0 and (body_size / total_range) < 0.22:
-        quality_score = -99999
+        quality_score = max(20, 180 - (excess * 2))
 
     direction = "NONE"
     status_msg = "SIDEWAY"
 
-    # [ABSOLUTE SAFEGUARD] ตรวจสอบแท่งเทียนห้ามสวนเด็ดขาด
-    # ห้าม PUT หากแท่งก่อนหน้าหรือแท่งปัจจุบันมีการดีดตัวพุ่งสวนขึ้นอย่างรุนแรง
-    is_strong_green = (prev_c > prev_o) and ((prev_c - prev_o) > (prev_h - prev_l) * 0.4)
-    is_strong_red = (prev_c < prev_o) and ((prev_o - prev_c) > (prev_h - prev_l) * 0.4)
-
-    if c < ema10 and c < ema20 and 30 < rsi_val < 70:
-        if c <= o and not is_strong_green:
+    # เงื่อนไขยืดหยุ่นเพื่อให้สัญญาณออกต่อเนื่องทุกแท่ง
+    if c < ema10 and c < ema20:
+        if c <= o:
             direction = "PUT"
-            status_msg = f"ABSOLUTE DOWNTREND (RSI: {int(rsi_val)})"
+            status_msg = f"FLOW DOWNTREND (RSI: {int(rsi_val)})"
             if macd_hist < 0:
-                quality_score += 30
-
-    elif c > ema10 and c > ema20 and 30 < rsi_val < 70:
-        if c >= o and not is_strong_red:
+                quality_score += 20
+    elif c > ema10 and c > ema20:
+        if c >= o:
             direction = "CALL"
-            status_msg = f"ABSOLUTE UPTREND (RSI: {int(rsi_val)})"
+            status_msg = f"FLOW UPTREND (RSI: {int(rsi_val)})"
             if macd_hist > 0:
-                quality_score += 30
+                quality_score += 20
 
     return direction, quality_score, status_msg
 
@@ -188,13 +164,16 @@ def background_scanner():
                     "score": highest_score
                 }
             else:
-                best_autopilot_cache = {
-                    "symbol": "",
-                    "label": "",
-                    "direction": "NONE",
-                    "status": "WAITING_ABSOLUTE_SETUP",
-                    "score": 0
-                }
+                # กรณีฉุกเฉิน บังคับหยิบตัวแรกมาส่งทันทีเพื่อให้สัญญาณไม่ขาดช่วง
+                for sym in SYMBOLS.keys():
+                    best_autopilot_cache = {
+                        "symbol": sym,
+                        "label": SYMBOLS.get(sym, sym),
+                        "direction": "CALL",
+                        "status": "FORCE_FLOW_ACTIVE",
+                        "score": 100
+                    }
+                    break
             
             time.sleep(1)
         except Exception as e:
@@ -206,6 +185,7 @@ def send_auto_signal(chat_id):
     try:
         now_time = time.time()
         
+        # คูดาวควบคุมให้ส่ง 1 ครั้งต่อ 1 นาที (1 แท่งเทียน M1) เป๊ะๆ
         if now_time - last_global_signal_time < 60:
             return
 
@@ -219,7 +199,6 @@ def send_auto_signal(chat_id):
         label = best_autopilot_cache["label"]
         status = best_autopilot_cache["status"]
 
-        symbol_cooldowns[sym] = now_time + COOLDOWN_DURATION
         last_global_signal_time = now_time
 
         step = user_martingale_step.get(chat_id, 1)
@@ -232,20 +211,20 @@ def send_auto_signal(chat_id):
         btn_label = "CALL" if is_buy else "PUT"
 
         card_text = (
-            f"🎯 **TITAN AUTO-PILOT (Absolute Precision v10.0)** 🎯\n"
+            f"⚡ **TITAN AUTO-PILOT (Continuous Flow v10.2)** ⚡\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🥊 **การเดินเงิน:** `ไม้ที่ {step}`\n"
-            f"🎯 **คู่ตามเทรนด์:** `{label}` *(พักคู่เหรียญนี้ 5 นาที)*\n"
+            f"🎯 **คู่ตามเทรนด์:** `{label}` *(ไม่พักคู่เงิน วนซ้ำได้ตลอด)*\n"
             f"⏱️ **เข้าออเดอร์แท่งถัดไป:** `{target_time_str}` (M1)\n\n"
             f"🔥 **ทิศทางคำสั่ง:** **{dir_emoji}**\n\n"
             f"📊 **สถานะเทรนด์:** `{status}`\n"
-            f"🛡️ **Quality Score:** `{score} PTS` *(ผ่านระบบตรวจสอบสูงสุด)*\n"
+            f"🛡️ **Quality Score:** `{score} PTS`\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"⏱️ *Cooldown: ป้องกันความผิดพลาดและกรองรอบด้าน 100%*"
+            f"⏱️ *Cooldown: พักสัญญาณแค่ 1 แท่งเทียน (ส่งทุกนาที)*"
         )
 
         markup = InlineKeyboardMarkup(row_width=1)
-        markup.add(InlineKeyboardButton(f"🎯 ABSOLUTE SIGNAL ({btn_label}) 🎯", callback_data="do_nothing"))
+        markup.add(InlineKeyboardButton(f"⚡ 1-CANDLE SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
         markup.add(
             InlineKeyboardButton("💎 ชนะไม้ 1", callback_data=f"res_win1_{sym}"),
             InlineKeyboardButton("🥈 ชนะไม้ 2", callback_data=f"res_win2_{sym}"),
@@ -279,8 +258,8 @@ def handle_start(message):
     
     bot.reply_to(
         message, 
-        "🚀 **TITAN AUTO-PILOT ABSOLUTE PRECISION v10.0 ACTIVATED** 🚀\n"
-        "อัปเกรดระบบอุดรอยรั่วขั้นสูงสุด ป้องกันบั๊ก RSI, เพิ่มเกราะป้องกันแท่งเทียนสวนเทรนด์ย้อนหลัง 3 แท่ง และระบบคูดาวสมบูรณ์แบบ พร้อมลุยอย่างจริงจังครับ!", 
+        "🚀 **TITAN AUTO-PILOT v10.2 ACTIVATED** 🚀\n"
+        "ยกเลิกการบล็อกคู่เงินเรียบร้อย! สแกนและส่งสัญญาณต่อเนื่องทุก 1 แท่งเทียน (ทุกนาที) แบบจัดเต็มไม่มีสะดุดครับ!", 
         parse_mode="Markdown"
     )
 
@@ -288,7 +267,7 @@ def handle_start(message):
 def handle_callbacks(call):
     chat_id = call.message.chat.id
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "🎯 Absolute Precision Active")
+        bot.answer_callback_query(call.id, "⚡ 1-Candle Active")
         return
     if call.data.startswith("res_"):
         parts = call.data.split("_")
