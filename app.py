@@ -41,7 +41,7 @@ best_autopilot_cache = {
     "symbol": "",
     "label": "",
     "direction": "NONE",
-    "status": "WAITING_DATA",
+    "status": "DEEP_SCANNING",
     "score": -999999
 }
 
@@ -49,7 +49,6 @@ def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
 def fetch_kline(symbol, interval="1m", limit=30):
-    # ยิงผ่าน Binance API หลัก
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
         res = requests.get(url, timeout=2.5)
@@ -64,7 +63,6 @@ def fetch_kline(symbol, interval="1m", limit=30):
     except Exception:
         pass
 
-    # สำรอง: ยิงผ่าน Binance API US
     try:
         url = f"https://api.binance.us/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
         res = requests.get(url, timeout=2.5)
@@ -96,15 +94,13 @@ def analyze_autopilot(symbol):
 
     distance_score = int((abs(c - ema20) / (ema20 + 1e-9)) * 100000)
 
-    # บังคับตามเทรนด์เด็ดขาด
+    # ระบบกรองเทรนด์เข้มงวด ห้ามสวน
     if c < o and c < ema10 and c < ema20:
-        return "PUT", distance_score + 1000, "STRICT DOWNTREND"
+        return "PUT", distance_score, "STRICT DOWNTREND"
     elif c > o and c > ema10 and c > ema20:
-        return "CALL", distance_score + 1000, "STRICT UPTREND"
-    elif c < ema20:
-        return "PUT", distance_score, "WEAK DOWNTREND"
-    else:
-        return "CALL", distance_score, "WEAK UPTREND"
+        return "CALL", distance_score, "STRICT UPTREND"
+    
+    return "NONE", distance_score, "WEAK OR SIDEWAY"
 
 def background_scanner():
     global best_autopilot_cache
@@ -112,18 +108,21 @@ def background_scanner():
         try:
             top_sym = None
             top_dir = "NONE"
-            top_status = "SCANNING"
+            top_status = "DEEP_SCANNING"
             highest_score = -999999
 
+            MIN_PTS_THRESHOLD = 75
+
+            # วนลูปคำนวณแบบละเอียดยิบทุกสินทรัพย์ตลอดช่วง Cooldown
             for sym in SYMBOLS.keys():
                 direction, score, status = analyze_autopilot(sym)
-                if score > highest_score and direction != "NONE" and score > 0:
+                if score >= MIN_PTS_THRESHOLD and score > highest_score and direction != "NONE":
                     highest_score = score
                     top_sym = sym
                     top_dir = direction
                     top_status = status
 
-            if top_sym and highest_score > 0:
+            if top_sym and highest_score >= MIN_PTS_THRESHOLD:
                 best_autopilot_cache = {
                     "symbol": top_sym,
                     "label": SYMBOLS.get(top_sym, top_sym),
@@ -131,25 +130,26 @@ def background_scanner():
                     "status": top_status,
                     "score": highest_score
                 }
-            time.sleep(1.5)
+            
+            # วนลูปเช็คความถี่ต่อเนื่องแบบเรียลไทม์
+            time.sleep(1)
         except Exception as e:
             print(f"Scanner Error: {e}")
-            time.sleep(3)
+            time.sleep(2)
 
 def send_auto_signal(chat_id):
     global last_global_signal_time
     try:
         now_time = time.time()
         
-        # Cooldown 1 แท่งเทียน (60 วินาที)
+        # Cooldown ล็อค 60 วินาที (1 แท่งเทียน) ระหว่างส่งสัญญาณ
         if now_time - last_global_signal_time < 60:
             return
 
         direction = best_autopilot_cache["direction"]
         score = best_autopilot_cache["score"]
 
-        # SAFE-GUARD: ถ้าดึงข้อมูลไม่ได้ หรือคะแนนติดลบ ให้ข้าม ไม่ส่งสัญญาณมั่วเด็ดขาด
-        if direction == "NONE" or score <= 0:
+        if direction == "NONE" or score < 75:
             return
 
         sym = best_autopilot_cache["symbol"]
@@ -168,7 +168,7 @@ def send_auto_signal(chat_id):
         btn_label = "CALL" if is_buy else "PUT"
 
         card_text = (
-            f"⚡ **TITAN AUTO-PILOT MASTER v6.2** ⚡\n"
+            f"⚡ **TITAN AUTO-PILOT v6.4** ⚡\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🥊 **การเดินเงิน:** `ไม้ที่ {step}`\n"
             f"🎯 **คู่ที่มั่นใจตามเทรนด์ที่สุด:** `{label}`\n"
@@ -197,14 +197,15 @@ def auto_broadcaster():
     while True:
         try:
             now = get_thai_time()
+            # ยิงสัญญาณทันทีที่วินาทีที่ 30 ของทุกนาที
             if now.second == 30 and now.minute != last_sent_minute:
                 last_sent_minute = now.minute
                 for cid in list(active_chat_ids):
                     send_auto_signal(cid)
-            time.sleep(0.5)
+            time.sleep(0.3)
         except Exception as e:
             print(f"Loop Error: {e}")
-            time.sleep(2)
+            time.sleep(1)
 
 @bot.message_handler(commands=['start', 'run'])
 def handle_start(message):
@@ -215,8 +216,8 @@ def handle_start(message):
     
     bot.reply_to(
         message, 
-        "🚀 **TITAN AUTO-PILOT v6.2 ACTIVATED** 🚀\n"
-        "เพิ่มระบบกันสัญญาณหลุดขยะ 100% ถ้าดึงข้อมูลไม่ได้จะไม่ส่งมั่วเด็ดขาด!", 
+        "🚀 **TITAN AUTO-PILOT v6.4 ACTIVATED** 🚀\n"
+        "เปิดระบบคำนวณเจาะลึกเบื้องหลังตลอดช่วง Cooldown สัญญาณเข้าต่อเนื่องไม่มีสะดุด!", 
         parse_mode="Markdown"
     )
 
