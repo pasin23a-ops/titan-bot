@@ -13,7 +13,6 @@ active_chat_ids = set()
 user_martingale_step = {}
 last_global_signal_time = 0 
 
-# [ระบบคูดาว] คูดาวแยกรายคู่ (3 นาที) และคูดาวควบคุมจังหวะส่งสัญญาณ 1 แท่งเทียน
 symbol_cooldowns = {}
 PAIR_COOLDOWN_DURATION = 180  
 
@@ -46,7 +45,7 @@ market_data_cache = {}
 def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
-def fetch_kline(symbol, interval="1m", limit=50):
+def fetch_kline(symbol, interval="1m", limit=40):
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
         res = requests.get(url, timeout=2.0)
@@ -58,6 +57,19 @@ def fetch_kline(symbol, interval="1m", limit=50):
             return df
     except Exception:
         pass
+    
+    try:
+        url = f"https://api.binance.us/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+        res = requests.get(url, timeout=2.0)
+        if res.status_code == 200:
+            raw = res.json()
+            df = pd.DataFrame(raw, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'])
+            for col in ['open', 'high', 'low', 'close']:
+                df[col] = df[col].astype(float)
+            return df
+    except Exception:
+        pass
+    
     return None
 
 def calculate_rsi(series, period=14):
@@ -68,14 +80,13 @@ def calculate_rsi(series, period=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-def analyze_symbol_master(symbol):
+def analyze_symbol_v13_fix(symbol):
     current_time = time.time()
-    # [ระบบคูดาวรายคู่] ตรวจสอบว่าคู่นี้ติดพักชั่วคราวอยู่หรือไม่
     if symbol in symbol_cooldowns and current_time < symbol_cooldowns[symbol]:
-        return "NONE", -99999, "PAIR_COOLDOWN"
+        return "NONE", -99999, "COOLDOWN"
 
-    df = fetch_kline(symbol, "1m", 50)
-    if df is None or len(df) < 40:
+    df = fetch_kline(symbol, "1m", 40)
+    if df is None or len(df) < 30:
         return "NONE", 0, "DATA_ERROR"
 
     df['ema_10'] = df['close'].ewm(span=10, adjust=False).mean()
@@ -89,9 +100,6 @@ def analyze_symbol_master(symbol):
 
     c = float(df['close'].iloc[-2])
     o = float(df['open'].iloc[-2])
-    h = float(df['high'].iloc[-2])
-    l = float(df['low'].iloc[-2])
-    
     ema10 = float(df['ema_10'].iloc[-2])
     ema20 = float(df['ema_20'].iloc[-2])
     rsi_val = float(df['rsi'].iloc[-2])
@@ -100,45 +108,27 @@ def analyze_symbol_master(symbol):
     if pd.isna(rsi_val):
         rsi_val = 50.0
 
-    # [ระบบแนวรับแนวต้าน S&R Filter] ตรวจสอบกำแพงราคาจาก High/Low ย้อนหลัง
-    recent_high = df['high'].iloc[-22:-2].max()
-    recent_low = df['low'].iloc[-22:-2].min()
-    range_span = recent_high - recent_low
-    if range_span > 0:
-        near_resistance = (recent_high - c) / range_span < 0.025
-        near_support = (c - recent_low) / range_span < 0.025
-    else:
-        near_resistance = False
-        near_support = False
-
-    # [ระบบกรองความแรงแท่งเทียน] ตัดแท่งจิ๋วไร้พลังทิ้ง
-    body_size = abs(c - o)
-    total_range = h - l
-    if total_range > 0 and (body_size / total_range) < 0.25:
-        return "NONE", -99999, "WEAK_CANDLE_FILTERED"
-
     raw_distance = int((abs(c - ema20) / (ema20 + 1e-9)) * 100000)
 
-    # [ระบบเตือนอันตราย Exhaustion Trap] หากราคากระชากเกิน 180 PTS สั่งพักคู่ทันที
     if raw_distance > 180:
         symbol_cooldowns[symbol] = current_time + PAIR_COOLDOWN_DURATION
-        return "NONE", -99999, "⚠️ DANGER_EXHAUSTION_PAUSED"
+        return "NONE", -99999, "EXHAUSTION_PAUSE"
 
     direction = "NONE"
     status_msg = "SIDEWAY"
 
-    # [เงื่อนไขเทรนด์ + กรองแนวรับแนวต้าน + MACD Confluence]
-    if c < ema10 and c < ema20 and not near_support and macd_hist < 0:
+    if c < ema10 and c < ema20:
         if c <= o:
             direction = "PUT"
-            status_msg = f"S&R SAFE DOWNTREND (RSI: {int(rsi_val)})"
-            raw_distance += 25
-
-    elif c > ema10 and c > ema20 and not near_resistance and macd_hist > 0:
+            status_msg = f"FLOW DOWNTREND (RSI: {int(rsi_val)})"
+            if macd_hist < 0:
+                raw_distance += 20
+    elif c > ema10 and c > ema20:
         if c >= o:
             direction = "CALL"
-            status_msg = f"S&R SAFE UPTREND (RSI: {int(rsi_val)})"
-            raw_distance += 25
+            status_msg = f"FLOW UPTREND (RSI: {int(rsi_val)})"
+            if macd_hist > 0:
+                raw_distance += 20
 
     return direction, raw_distance, status_msg
 
@@ -152,7 +142,7 @@ def background_fast_scanner():
             highest_score = -999999
 
             for sym in SYMBOLS.keys():
-                direction, score, status = analyze_symbol_master(sym)
+                direction, score, status = analyze_symbol_v13_fix(sym)
                 if score > highest_score and direction != "NONE":
                     highest_score = score
                     best_sym = sym
@@ -168,29 +158,23 @@ def background_fast_scanner():
                     "score": highest_score
                 }
             else:
-                # [Fast Rotation Fallback] สำรองข้อมูลดึงคู่ที่พร้อมที่สุดมาหมุนเวียน เพื่อให้สัญญาณไม่ขาดช่วงทุกนาที
-                fallback_sym, fallback_score, fallback_dir = "", -99999, "CALL"
+                # ระบบสำรองฉุกเฉิน บังคับหยิบตัวที่ไม่ติดคูดาวมาส่งทันทีเพื่อให้สัญญาณไม่ขาดตอน
                 for sym in SYMBOLS.keys():
                     cur_t = time.time()
                     if sym not in symbol_cooldowns or cur_t >= symbol_cooldowns[sym]:
                         df_t = fetch_kline(sym, "1m", 15)
-                        if df_t is not None:
-                             c_t = float(df_t['close'].iloc[-2])
-                             o_t = float(df_t['open'].iloc[-2])
-                             d_s = int(abs(c_t - o_t) * 10000)
-                             if d_s > fallback_score:
-                                 fallback_score = d_s
-                                 fallback_sym = sym
-                                 fallback_dir = "CALL" if c_t >= o_t else "PUT"
-                                 
-                if fallback_sym:
-                    market_data_cache = {
-                        "symbol": fallback_sym,
-                        "label": SYMBOLS.get(fallback_sym, fallback_sym),
-                        "direction": fallback_dir,
-                        "status": "FAST_ROTATION_READY",
-                        "score": max(70, min(160, fallback_score))
-                    }
+                        if df_t is not None and len(df_t) > 2:
+                            c_t = float(df_t['close'].iloc[-2])
+                            o_t = float(df_t['open'].iloc[-2])
+                            d_dir = "CALL" if c_t >= o_t else "PUT"
+                            market_data_cache = {
+                                "symbol": sym,
+                                "label": SYMBOLS.get(sym, sym),
+                                "direction": d_dir,
+                                "status": "FORCE_FLOW_ACTIVE",
+                                "score": 100
+                            }
+                            break
             
             time.sleep(0.5)
         except Exception as e:
@@ -202,7 +186,7 @@ def send_auto_signal(chat_id):
     try:
         now_time = time.time()
         
-        # [Strict 1-Candle Global Cooldown] บังคับส่งสัญญาณตรงเวลาทุก 1 นาทีเป๊ะ
+        # บังคับส่งสัญญาณตรงเวลาทุก 1 นาที (1 แท่งเทียน M1) เป๊ะๆ
         if now_time - last_global_signal_time < 58:
             return
 
@@ -216,7 +200,6 @@ def send_auto_signal(chat_id):
         label = market_data_cache["label"]
         status = market_data_cache["status"]
 
-        # เมื่อส่งแล้ว ให้ติดคูดาวพักคู่ชั่วคราว
         symbol_cooldowns[sym] = now_time + PAIR_COOLDOWN_DURATION
         last_global_signal_time = now_time
 
@@ -230,20 +213,20 @@ def send_auto_signal(chat_id):
         btn_label = "CALL" if is_buy else "PUT"
 
         card_text = (
-            f"🛡️ **TITAN AUTO-PILOT (Master Guard v13.1)** 🛡️\n"
+            f"⚡ **TITAN AUTO-PILOT (v13.2 Fix)** ⚡\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🥊 **การเดินเงิน:** `ไม้ที่ {step}`\n"
-            f"🎯 **คู่คำนวณ:** `{label}` *(พักคู่ 3 นาที)*\n"
+            f"🎯 **คู่คำนวณสด:** `{label}` *(พักคู่ 3 นาที)*\n"
             f"⏱️ **เข้าออเดอร์แท่งถัดไป:** `{target_time_str}` (M1)\n\n"
             f"🔥 **ทิศทางคำสั่ง:** **{dir_emoji}**\n\n"
-            f"📊 **สถานะ S&R / Guard:** `{status}`\n"
-            f"🛡️ **Quality Score:** `{score} PTS` *(ระบบป้องกันครบถ้วน)*\n"
+            f"📊 **สถานะ:** `{status}`\n"
+            f"🛡️ **Quality Score:** `{score} PTS`\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"⏱️ *Cooldown: สัญญาณมาต่อเนื่องทุก 1 แท่งเทียนเป๊ะ*"
+            f"⏱️ *Cooldown: สัญญาณไหลลื่นต่อเนื่องทุกนาที*"
         )
 
         markup = InlineKeyboardMarkup(row_width=1)
-        markup.add(InlineKeyboardButton(f"🛡️ MASTER SIGNAL ({btn_label}) 🛡️", callback_data="do_nothing"))
+        markup.add(InlineKeyboardButton(f"⚡ FLOW SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
         markup.add(
             InlineKeyboardButton("💎 ชนะไม้ 1", callback_data=f"res_win1_{sym}"),
             InlineKeyboardButton("🥈 ชนะไม้ 2", callback_data=f"res_win2_{sym}"),
@@ -277,8 +260,8 @@ def handle_start(message):
     
     bot.reply_to(
         message, 
-        "🚀 **TITAN AUTO-PILOT MASTER GUARD v13.1 ACTIVATED** 🚀\n"
-        "ระบบครบถ้วนสมบูรณ์: คูดาวรายคู่ + แนวรับแนวต้าน (S&R) + แจ้งเตือนอันตราย Exhaustion Trap + สัญญาณไหลลื่นทุกแท่งเทียน พร้อมลุยเต็มระบบครับนาย!", 
+        "🚀 **TITAN AUTO-PILOT v13.2 ACTIVATED** 🚀\n"
+        "ปลดล็อกระบบสแกนฉุกเฉินเรียบร้อย สัญญาณเด้งรัวๆ ตรงเวลาทุกแท่งเทียนแบบไม่มีสะดุดแน่นอนครับ!", 
         parse_mode="Markdown"
     )
 
@@ -286,7 +269,7 @@ def handle_start(message):
 def handle_callbacks(call):
     chat_id = call.message.chat.id
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "🛡️ Master Guard Active")
+        bot.answer_callback_query(call.id, "⚡ Flow Engine Active")
         return
     if call.data.startswith("res_"):
         parts = call.data.split("_")
