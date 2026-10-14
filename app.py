@@ -13,8 +13,9 @@ active_chat_ids = set()
 user_martingale_step = {}
 last_global_signal_time = 0 
 
+# คูดาวรายคู่ จะทำงานเฉพาะตอนที่คู่ไหน "เสี่ยง/อันตราย" เท่านั้น (ส่งปกติจะไม่ติดคูดาวคู่)
 symbol_cooldowns = {}
-PAIR_COOLDOWN_DURATION = 180  
+DANGER_PAIR_COOLDOWN = 180  # พักเฉพาะคู่ที่เสี่ยง 3 นาที
 
 SYMBOLS = {
     "DYDXUSDT": "DYDX(OTC)",
@@ -80,10 +81,12 @@ def calculate_rsi(series, period=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-def analyze_symbol_v13_fix(symbol):
+def analyze_symbol_v14(symbol):
     current_time = time.time()
+    
+    # เช็คเฉพาะคู่ที่ติดสถานะ "เสี่ยง/อันตราย" เท่านั้น ถึงจะถูกล็อกคูดาวชั่วคราว
     if symbol in symbol_cooldowns and current_time < symbol_cooldowns[symbol]:
-        return "NONE", -99999, "COOLDOWN"
+        return "NONE", -99999, "PAIR_DANGER_COOLDOWN"
 
     df = fetch_kline(symbol, "1m", 40)
     if df is None or len(df) < 30:
@@ -100,6 +103,9 @@ def analyze_symbol_v13_fix(symbol):
 
     c = float(df['close'].iloc[-2])
     o = float(df['open'].iloc[-2])
+    h = float(df['high'].iloc[-2])
+    l = float(df['low'].iloc[-2])
+    
     ema10 = float(df['ema_10'].iloc[-2])
     ema20 = float(df['ema_20'].iloc[-2])
     rsi_val = float(df['rsi'].iloc[-2])
@@ -108,25 +114,37 @@ def analyze_symbol_v13_fix(symbol):
     if pd.isna(rsi_val):
         rsi_val = 50.0
 
+    # แนวรับแนวต้าน S&R Check
+    recent_high = df['high'].iloc[-22:-2].max()
+    recent_low = df['low'].iloc[-22:-2].min()
+    range_span = recent_high - recent_low
+    if range_span > 0:
+        near_resistance = (recent_high - c) / range_span < 0.025
+        near_support = (c - recent_low) / range_span < 0.025
+    else:
+        near_resistance = False
+        near_support = False
+
     raw_distance = int((abs(c - ema20) / (ema20 + 1e-9)) * 100000)
 
-    if raw_distance > 180:
-        symbol_cooldowns[symbol] = current_time + PAIR_COOLDOWN_DURATION
-        return "NONE", -99999, "EXHAUSTION_PAUSE"
+    # [ระบบเตือนอันตราย] หากกราฟกระชากหรือเข้าโซนอันตราย สั่งพิมเตือนและ "คูดาวเฉพาะคู่นี้" ทันทีจนกว่าจะปลอดภัย
+    if raw_distance > 180 or near_resistance or near_support:
+        symbol_cooldowns[symbol] = current_time + DANGER_PAIR_COOLDOWN
+        return "NONE", -99999, "⚠️ WARNING: PAIR IS DANGEROUS (COOLDOWN)"
 
     direction = "NONE"
     status_msg = "SIDEWAY"
 
-    if c < ema10 and c < ema20:
+    if c < ema10 and c < ema20 and not near_support:
         if c <= o:
             direction = "PUT"
-            status_msg = f"FLOW DOWNTREND (RSI: {int(rsi_val)})"
+            status_msg = f"SAFE DOWNTREND (RSI: {int(rsi_val)})"
             if macd_hist < 0:
                 raw_distance += 20
-    elif c > ema10 and c > ema20:
+    elif c > ema10 and c > ema20 and not near_resistance:
         if c >= o:
             direction = "CALL"
-            status_msg = f"FLOW UPTREND (RSI: {int(rsi_val)})"
+            status_msg = f"SAFE UPTREND (RSI: {int(rsi_val)})"
             if macd_hist > 0:
                 raw_distance += 20
 
@@ -142,7 +160,7 @@ def background_fast_scanner():
             highest_score = -999999
 
             for sym in SYMBOLS.keys():
-                direction, score, status = analyze_symbol_v13_fix(sym)
+                direction, score, status = analyze_symbol_v14(sym)
                 if score > highest_score and direction != "NONE":
                     highest_score = score
                     best_sym = sym
@@ -158,7 +176,7 @@ def background_fast_scanner():
                     "score": highest_score
                 }
             else:
-                # ระบบสำรองฉุกเฉิน บังคับหยิบตัวที่ไม่ติดคูดาวมาส่งทันทีเพื่อให้สัญญาณไม่ขาดตอน
+                # ระบบสำรอง: หากรอบไหนไม่มีคู่ผ่านเกณฑ์ ให้หยิบตัวที่ไม่ติดคูดาวอันตรายมาหมุนเวียน (คู่เดิมเทรดซ้ำได้ปกติ)
                 for sym in SYMBOLS.keys():
                     cur_t = time.time()
                     if sym not in symbol_cooldowns or cur_t >= symbol_cooldowns[sym]:
@@ -171,7 +189,7 @@ def background_fast_scanner():
                                 "symbol": sym,
                                 "label": SYMBOLS.get(sym, sym),
                                 "direction": d_dir,
-                                "status": "FORCE_FLOW_ACTIVE",
+                                "status": "FLOW_READY (REUSEABLE)",
                                 "score": 100
                             }
                             break
@@ -186,7 +204,7 @@ def send_auto_signal(chat_id):
     try:
         now_time = time.time()
         
-        # บังคับส่งสัญญาณตรงเวลาทุก 1 นาที (1 แท่งเทียน M1) เป๊ะๆ
+        # คูดาวภาพรวมระบบ: ส่งสัญญาณตรงเวลาทุก 1 นาที (1 แท่งเทียน M1) เป๊ะๆ
         if now_time - last_global_signal_time < 58:
             return
 
@@ -200,7 +218,7 @@ def send_auto_signal(chat_id):
         label = market_data_cache["label"]
         status = market_data_cache["status"]
 
-        symbol_cooldowns[sym] = now_time + PAIR_COOLDOWN_DURATION
+        # [สำคัญ] ส่งสัญญาณปกติ "จะไม่ล็อกคูดาวคู่เงิน" คู่เดิมสามารถวนกลับมาเทรดได้ทันทีในไม้ถัดไป
         last_global_signal_time = now_time
 
         step = user_martingale_step.get(chat_id, 1)
@@ -213,20 +231,20 @@ def send_auto_signal(chat_id):
         btn_label = "CALL" if is_buy else "PUT"
 
         card_text = (
-            f"⚡ **TITAN AUTO-PILOT (v13.2 Fix)** ⚡\n"
+            f"⚡ **TITAN AUTO-PILOT (v14.0 Conditional Cooldown)** ⚡\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🥊 **การเดินเงิน:** `ไม้ที่ {step}`\n"
-            f"🎯 **คู่คำนวณสด:** `{label}` *(พักคู่ 3 นาที)*\n"
+            f"🎯 **คู่คำนวณสด:** `{label}` *(คู่เงินไม่ติดคูดาว วนซ้ำได้)*\n"
             f"⏱️ **เข้าออเดอร์แท่งถัดไป:** `{target_time_str}` (M1)\n\n"
             f"🔥 **ทิศทางคำสั่ง:** **{dir_emoji}**\n\n"
             f"📊 **สถานะ:** `{status}`\n"
             f"🛡️ **Quality Score:** `{score} PTS`\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"⏱️ *Cooldown: สัญญาณไหลลื่นต่อเนื่องทุกนาที*"
+            f"⏱️ *Cooldown: ส่งสัญญาณทุก 1 แท่งเทียนเป๊ะ*"
         )
 
         markup = InlineKeyboardMarkup(row_width=1)
-        markup.add(InlineKeyboardButton(f"⚡ FLOW SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
+        markup.add(InlineKeyboardButton(f"⚡ FLEX SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
         markup.add(
             InlineKeyboardButton("💎 ชนะไม้ 1", callback_data=f"res_win1_{sym}"),
             InlineKeyboardButton("🥈 ชนะไม้ 2", callback_data=f"res_win2_{sym}"),
@@ -260,8 +278,8 @@ def handle_start(message):
     
     bot.reply_to(
         message, 
-        "🚀 **TITAN AUTO-PILOT v13.2 ACTIVATED** 🚀\n"
-        "ปลดล็อกระบบสแกนฉุกเฉินเรียบร้อย สัญญาณเด้งรัวๆ ตรงเวลาทุกแท่งเทียนแบบไม่มีสะดุดแน่นอนครับ!", 
+        "🚀 **TITAN AUTO-PILOT v14.0 ACTIVATED** 🚀\n"
+        "ตั้งค่าระบบคูดาวใหม่สำเร็จ: สัญญาณส่งทุก 1 แท่งเทียนเป๊ะ / คู่เงินไม่ติดคูดาวหลังส่ง (วนซ้ำได้อิสระ) / จะคูดาวเฉพาะตอนที่พบบอดี้คู่ไหนเสี่ยงหรืออันตรายเท่านั้นครับ!", 
         parse_mode="Markdown"
     )
 
@@ -269,7 +287,7 @@ def handle_start(message):
 def handle_callbacks(call):
     chat_id = call.message.chat.id
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ Flow Engine Active")
+        bot.answer_callback_query(call.id, "⚡ Conditional Cooldown Active")
         return
     if call.data.startswith("res_"):
         parts = call.data.split("_")
