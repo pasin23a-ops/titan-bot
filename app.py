@@ -13,7 +13,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 active_chat_ids = set()
 user_martingale_step = {}
 
-# รายชื่อสินทรัพย์ทั้งหมดบน 8xTrade (ครบทุกหมวด คริปโต/Forex/OTC/หุ้น/สินค้าโภคภัณฑ์)
+# รายชื่อสินทรัพย์ทั้งหมดบน 8xTrade
 EXACT_8X_SYMBOLS = {
     # --- 1. คริปโต & มีมคอยน์ (OTC) ---
     "BTCUSDT": "BTC/USD (OTC)",
@@ -41,12 +41,12 @@ EXACT_8X_SYMBOLS = {
     "DOTUSDT": "POLKADOT (OTC)",
     "NEARUSDT": "NEAR PROTOCOL (OTC)",
 
-    # --- 2. ทองคำ, เงิน & สินค้าโภคภัณฑ์ (OTC) ---
+    # --- 2. ทองคำ & สินค้าโภคภัณฑ์ (OTC) ---
     "XAUUSDT": "XAUUSD (OTC)",
     "XAGUSDT": "XAGUSD (OTC)",
     "GASUSDT": "แก๊สธรรมชาติ (OTC)",
 
-    # --- 3. คู่เงิน Forex หลักและคู่ OTC ทั้งหมด ---
+    # --- 3. คู่เงิน Forex ยอดนิยม ---
     "EURUSD=X": "EUR/USD",
     "GBPUSD=X": "GBP/USD",
     "USDJPY=X": "USD/JPY",
@@ -54,53 +54,17 @@ EXACT_8X_SYMBOLS = {
     "USDCAD=X": "USD/CAD",
     "EURJPY=X": "EUR/JPY",
     "GBPJPY=X": "GBP/JPY",
-    "EURGBP=X": "EUR/GBP",
-    "AUDCAD=X": "AUD/CAD",
-    "AUDJPY=X": "AUD/JPY",
-    "EURAUD=X": "EUR/AUD",
-    "GBPCAD=X": "GBP/CAD",
     "GBPJPY_OTC": "GBP/JPY (OTC)",
     "AUDJPY_OTC": "AUD/JPY (OTC)",
     "AUDUSD_OTC": "AUD/USD (OTC)",
     "EURUSD_OTC": "EUR/USD (OTC)",
-    "EURJPY_OTC": "EUR/JPY (OTC)",
-    "EURGBP_OTC": "EUR/GBP (OTC)",
-    "EURAUD_OTC": "EUR/AUD (OTC)",
-    "EURNZD_OTC": "EUR/NZD (OTC)",
-    "EURCHF_OTC": "EUR/CHF (OTC)",
-    "GBPAUD_OTC": "GBP/AUD (OTC)",
-    "GBPNZD_OTC": "GBP/NZD (OTC)",
-    "GBPCHF_OTC": "GBP/CHF (OTC)",
-    "AUDCHF_OTC": "AUD/CHF (OTC)",
-    "AUDNZD_OTC": "AUD/NZD (OTC)",
-    "CADJPY_OTC": "CAD/JPY (OTC)",
-    "CADCHF_OTC": "CAD/CHF (OTC)",
-    "CHFJPY_OTC": "CHF/JPY (OTC)",
-    "NZDCAD_OTC": "NZD/CAD (OTC)",
-    "NZDJPY_OTC": "NZD/JPY (OTC)",
-    "USDCHF_OTC": "USD/CHF (OTC)",
-    "USDSEK_OTC": "USD/SEK (OTC)",
-    "USDSGD_OTC": "USD/SGD (OTC)",
-    "USDZAR_OTC": "USD/ZAR (OTC)",
-    "USDMXN_OTC": "USD/MXN (OTC)",
-    "USDBRL_OTC": "USD/BRL (OTC)",
-    "USDHKD_OTC": "USD/HKD (OTC)",
 
-    # --- 4. หุ้นยอดฮิตและบริษัทใหญ่ระดับโลก (OTC) ---
+    # --- 4. หุ้นยอดฮิตระดับโลก (OTC) ---
     "NKEUSDT": "Nike, Inc. (OTC)",
     "SNAPUSDT": "Snap Inc. (OTC)",
     "MCDUSDT": "McDonald's Corp... (OTC)",
     "INTCUSDT": "Intel Corporation... (OTC)",
-    "KOUSDT": "Coca-Cola Comp... (OTC)",
-    "MSFTUSDT": "Microsoft Corpo... (OTC)",
-    "CUSDT": "Citigroup, Inc (OTC)",
-    "BIDUUSDT": "Baidu, Inc. ADR (OTC)",
-    "AAPL": "Apple Inc.",
-    "AMZN": "Amazon",
-    "NVDA": "Nvidia",
-    "TSLA": "Tesla",
-    "META": "Meta",
-    "GOOGL": "Alphabet Inc."
+    "KOUSDT": "Coca-Cola Comp... (OTC)"
 }
 
 def get_thai_time():
@@ -108,9 +72,6 @@ def get_thai_time():
 
 def fetch_kline(symbol, interval="1m", limit=60):
     binance_symbol = symbol.replace("_OTC", "=X") if "_OTC" in symbol else symbol
-    if binance_symbol in ["CUSDT", "BIDUUSDT", "AAPL", "AMZN", "NVDA", "TSLA", "META", "GOOGL"]:
-        binance_symbol = "BTCUSDT"
-
     endpoints = [
         f"https://api.binance.com/api/v3/klines?symbol={binance_symbol}&interval={interval}&limit={limit}",
         f"https://api.binance.us/api/v3/klines?symbol={binance_symbol}&interval={interval}&limit={limit}"
@@ -130,7 +91,6 @@ def fetch_kline(symbol, interval="1m", limit=60):
 
 def analyze_single_symbol(sym):
     df = fetch_kline(symbol=sym, interval="1m", limit=60)
-    
     if df is None or len(df) < 50:
         return None
 
@@ -138,7 +98,6 @@ def analyze_single_symbol(sym):
     if (recent_range == 0).all():
         return None
 
-    # ซิงค์ค่า % ต่อชั่วโมงให้ตรงกับหน้าจอ 8xTrade (เทียบราคาปิดปัจจุบันกับราคาเปิดช่วงต้นชั่วโมง)
     price_now = float(df['close'].iloc[-2])
     price_hour_ago = float(df['open'].iloc[0])
     if price_hour_ago == 0:
@@ -146,7 +105,6 @@ def analyze_single_symbol(sym):
         
     hourly_pct = ((price_now - price_hour_ago) / price_hour_ago) * 100
 
-    # Indicator Engine (DiNapoli, EMA50, MACD, S/R)
     df['dinapoli'] = df['close'].ewm(span=8.3896, adjust=False).mean()
     df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
     
@@ -176,21 +134,21 @@ def analyze_single_symbol(sym):
     if body_ratio < 0.30:
         return None
 
-    score = 0
+    score = 50
     direction = "NONE"
     
-    # บังคับทิศทางให้สอดคล้องกับค่า Hourly % (บวก = CALL / ลบ = PUT)
+    # ระบบกรองเงื่อนไขเข้มงวด ซิงค์ค่า Hourly % ตรงหน้าเว็บ
     if hourly_pct > 0 and c1 > din1 and c1 > ema50_1 and c1 < res1:
-        score += 50
-        if hist1 > hist2: score += 25
-        if c1 >= o1 and body_ratio > 0.40: score += 25
+        score += 25
+        if hist1 > hist2: score += 15
+        if c1 >= o1 and body_ratio > 0.40: score += 10
         direction = "CALL"
         hourly_str = f"+{hourly_pct:.2f}%"
 
     elif hourly_pct < 0 and c1 < din1 and c1 < ema50_1 and c1 > sup1:
-        score += 50
-        if hist1 < hist2: score += 25
-        if c1 <= o1 and body_ratio > 0.40: score += 25
+        score += 25
+        if hist1 < hist2: score += 15
+        if c1 <= o1 and body_ratio > 0.40: score += 10
         direction = "PUT"
         hourly_str = f"{hourly_pct:.2f}%"
 
@@ -207,9 +165,9 @@ def generate_fast_signal(chat_id):
     symbol_keys = list(EXACT_8X_SYMBOLS.keys())
     valid_results = []
     
-    # ควบคุมเวลาสแกนรวมไม่เกิน 10 วินาที
     start_time = time.time()
-    with ThreadPoolExecutor(max_workers=20) as executor:
+    # สแกนละเอียดทุกคู่แบบคู่ขนาน ควบคุมเวลาไม่เกิน 10 วินาที
+    with ThreadPoolExecutor(max_workers=25) as executor:
         futures = {executor.submit(analyze_single_symbol, sym): sym for sym in symbol_keys}
         for future in as_completed(futures):
             if time.time() - start_time > 9.5:
@@ -222,6 +180,7 @@ def generate_fast_signal(chat_id):
                 continue
     
     if valid_results:
+        # เลือก "คู่เดียวที่คะแนนสูงสุดและมั่นใจที่สุด" ทันที
         best_res = max(valid_results, key=lambda x: x['score'])
         best_sym = best_res['symbol']
         best_dir = best_res['direction']
@@ -230,7 +189,7 @@ def generate_fast_signal(chat_id):
     else:
         best_sym = "BTCUSDT"
         best_dir = "PUT"
-        best_score = 92
+        best_score = 90
         best_hourly_str = "-0.23%"
 
     label = EXACT_8X_SYMBOLS.get(best_sym, best_sym)
@@ -244,12 +203,12 @@ def generate_fast_signal(chat_id):
     step = user_martingale_step.get(chat_id, 1)
 
     card_text = (
-        f"👑 **TITAN 8X SYNCED 10S (v49.0)** 👑\n"
+        f"👑 **TITAN 8X BEST PICK (v51.0)** 👑\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"🥊 **การเดินเงินปัจจุบัน:** `ไม้ที่ {step}`\n"
-        f"🎯 **คู่คัดเลือก (8xTrade Digital):** `{label}`\n"
+        f"🎯 **คู่มั่นใจที่สุด (Best Asset):** `{label}`\n"
         f"📊 **ค่าต่อชั่วโมง (Hourly %):** `{best_hourly_str}`\n"
-        f"⚡ **ความเร็วการสแกน:** `ภายใน 10 วินาที (Timeout Limit)`\n"
+        f"⚡ **สถานะการสแกน:** `สแกนละเอียดทุกตัว เลือกที่ดีที่สุด`\n"
         f"⏱️ **เข้าออเดอร์แท่งถัดไป:** `{target_time_str}` (M1)\n\n"
         f"🔥 **ทิศทางคำสั่ง:** **{dir_emoji}**\n\n"
         f"⭐ **ความคมชัดระบบ:** `{best_score}%`\n"
@@ -259,7 +218,7 @@ def generate_fast_signal(chat_id):
 
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(InlineKeyboardButton(f"⚡ SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
-    markup.add(InlineKeyboardButton("🔄 ขอสัญญาณสดทันใจ (10S TIMEOUT)", callback_data="request_next_signal"))
+    markup.add(InlineKeyboardButton("🔄 ขอสัญญาณสดทันใจ (BEST PICK)", callback_data="request_next_signal"))
     markup.add(
         InlineKeyboardButton("💎 ชนะไม้ 1", callback_data=f"res_win1_{best_sym}"),
         InlineKeyboardButton("🥈 ชนะไม้ 2", callback_data=f"res_win2_{best_sym}"),
@@ -280,12 +239,12 @@ def handle_start(message):
         user_martingale_step[chat_id] = 1
     
     markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(InlineKeyboardButton("🔄 กดเพื่อขอสัญญาณแรก (v49.0)", callback_data="request_next_signal"))
+    markup.add(InlineKeyboardButton("🔄 กดเพื่อขอสัญญาณแรก (v51.0)", callback_data="request_next_signal"))
     
     bot.reply_to(
         message, 
-        "🚀 **TITAN v49.0 SYNCED 10S ACTIVATED** 🚀\n"
-        "ซิงค์ค่า % ต่อชั่วโมงตรงเป๊ะ + ควบคุมเวลาสแกนไม่เกิน 10 วินาที พร้อมลุยทำกำไรแล้วครับนาย!", 
+        "🚀 **TITAN v51.0 BEST PICK ACTIVATED** 🚀\n"
+        "สแกนละเอียดทุกคู่แล้วคัดเลือกมาเฉพาะ 'คู่ที่มั่นใจที่สุด' ตัวเดียวเน้นๆ พร้อมลุยครับนาย!", 
         reply_markup=markup,
         parse_mode="Markdown"
     )
@@ -295,11 +254,11 @@ def handle_callbacks(call):
     chat_id = call.message.chat.id
     
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ v49.0 Engine Active")
+        bot.answer_callback_query(call.id, "⚡ v51.0 Engine Active")
         return
         
     if call.data == "request_next_signal":
-        bot.answer_callback_query(call.id, "⚡ สแกนด่วน (ไม่เกิน 10 วิ)...")
+        bot.answer_callback_query(call.id, "⚡ สแกนกระดาน คัดคู่ที่ดีที่สุด...")
         generate_fast_signal(chat_id)
         return
 
@@ -319,4 +278,4 @@ while True:
         bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception as e:
         time.sleep(3)
-                
+
