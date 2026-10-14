@@ -70,55 +70,44 @@ def fetch_kline(symbol, interval="1m", limit=30):
 def generate_signal_on_demand(chat_id):
     best_sym = None
     best_dir = "NONE"
-    best_score = 95
-    best_status = "SNIPER RANDOMIZED FILTER"
+    best_status = "ALPHA ULTIMATE FILTER"
 
-    # สลับลำดับคู่เหรียญแบบสุ่มทุกครั้งที่กด เพื่อไม่ให้ค้างคาอยู่ที่คู่เดิมซ้ำๆ
     symbol_keys = list(SYMBOLS.keys())
     random.shuffle(symbol_keys)
 
     for sym in symbol_keys:
         df = fetch_kline(symbol=sym, interval="1m", limit=30)
-        if df is None or len(df) < 20:
+        if df is None or len(df) < 25:
             continue
 
-        c1 = float(df['close'].iloc[-2])
+        c1 = float(df['close'].iloc[-2]) # แท่งล่าสุดที่ปิดแล้ว
         o1 = float(df['open'].iloc[-2])
         h1 = float(df['high'].iloc[-2])
         l1 = float(df['low'].iloc[-2])
 
-        c2 = float(df['close'].iloc[-3])
+        c2 = float(df['close'].iloc[-3]) # แท่งก่อนหน้า
         o2 = float(df['open'].iloc[-3])
+        
+        c3 = float(df['close'].iloc[-4]) # แท่งที่สาม
+        o3 = float(df['open'].iloc[-4])
 
         body1 = abs(c1 - o1)
         range1 = h1 - l1
         
-        direction = "NONE"
-        if range1 > 0 and (body1 / range1) > 0.5:
-            if c1 > o1 and c2 > o2:
-                direction = "CALL"
-                best_status = "SNIPER UPTREND (BODY CONFIRMED)"
-            elif c1 < o1 and c2 < o2:
-                direction = "PUT"
-                best_status = "SNIPER DOWNTREND (BODY CONFIRMED)"
-
-        if direction != "NONE":
-            best_sym = sym
-            best_dir = direction
-            break
-
-    # กรณีสำรอง สุ่มหยิบเหรียญที่ไม่ซ้ำเดิมมาออกผลทันที
-    if not best_sym:
-        for sym in symbol_keys:
-            df_t = fetch_kline(symbol=sym, interval="1m", limit=10)
-            if df_t is not None and len(df_t) > 2:
-                c_t = float(df_t['close'].iloc[-2])
-                o_t = float(df_t['open'].iloc[-2])
-                best_dir = "CALL" if c_t >= o_t else "PUT"
+        # เงื่อนไขความคมชัดสูงสุด: เนื้อเทียนต้องหนา > 70% และ 3 แท่งต้องเรียงสีเดียวกันเป๊ะ (ห้ามสลับสี)
+        if range1 > 0 and (body1 / range1) >= 0.7:
+            if c1 > o1 and c2 > o2 and c3 > o3:
                 best_sym = sym
-                best_status = "RANDOMIZED MOMENTUM SYNC"
+                best_dir = "CALL"
+                best_status = "ALPHA STRONG UPTREND (3-CANDLE LOCK)"
+                break
+            elif c1 < o1 and c2 < o2 and c3 < o3:
+                best_sym = sym
+                best_dir = "PUT"
+                best_status = "ALPHA STRONG DOWNTREND (3-CANDLE LOCK)"
                 break
 
+    # หากรอบไหนไม่มีคู่ไหนผ่านเกณฑ์ 3 แท่งเข้มข้น บอทจะนิ่งไว้ก่อนเพื่อความปลอดภัยสูงสุด (ไม่ฝืนส่งมั่วซั่ว)
     if best_sym and best_dir != "NONE":
         label = SYMBOLS.get(best_sym, best_sym)
         now = get_thai_time()
@@ -131,14 +120,13 @@ def generate_signal_on_demand(chat_id):
         step = user_martingale_step.get(chat_id, 1)
 
         card_text = (
-            f"⚡ **TITAN SNIPER (v18.1 Randomized)** ⚡\n"
+            f"⚡ **TITAN ALPHA (v19.0 Ultimate Sniper)** ⚡\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🥊 **การเดินเงิน:** `ไม้ที่ {step}`\n"
-            f"🎯 **คู่คำนวณสด:** `{label}` *(สุ่มกระจายทุกเหรียญ)*\n"
+            f"🎯 **คู่คำนวณสด:** `{label}` *(ผ่านเกณฑ์ความคมชัดสูงสุด)*\n"
             f"⏱️ **เข้าออเดอร์แท่งถัดไป:** `{target_time_str}` (M1)\n\n"
             f"🔥 **ทิศทางคำสั่ง:** **{dir_emoji}**\n\n"
             f"📊 **สถานะ:** `{best_status}`\n"
-            f"🛡️ **Quality Score:** `{best_score} PTS`\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"👇 *กดปุ่มด้านล่างเพื่อขอสัญญาณรอบถัดไป*"
         )
@@ -157,6 +145,12 @@ def generate_signal_on_demand(chat_id):
             bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
         except Exception as e:
             print(f"Send Error: {e}")
+    else:
+        # ถ้าไม่มีคู่ไหนผ่านเกณฑ์ 3 แท่งทองคำ แจ้งเตือนเพื่อให้รอก่อน ป้องกันการกดมั่ว
+        try:
+            bot.send_message(chat_id, "⚠️ **ตลาดกำลังผันผวนหรือไซด์เวย์!** ระบบ Alpha บล็อกสัญญาณไว้เพื่อความปลอดภัย กรุณากดขอสัญญาณใหม่อีกครั้งในรอบถัดไปครับ", parse_mode="Markdown")
+        except Exception:
+            pass
 
 @bot.message_handler(commands=['start', 'run'])
 def handle_start(message):
@@ -166,12 +160,12 @@ def handle_start(message):
         user_martingale_step[chat_id] = 1
     
     markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(InlineKeyboardButton("🔄 กดเพื่อขอสัญญาณแรก (START SIGNAL)", callback_data="request_next_signal"))
+    markup.add(InlineKeyboardButton("🔄 กดเพื่อขอสัญญาณแรก (ALPHA SIGNAL)", callback_data="request_next_signal"))
     
     bot.reply_to(
         message, 
-        "🚀 **TITAN SNIPER v18.1 ACTIVATED** 🚀\n"
-        "อัปเกรดระบบสุ่มกระจายคู่เหรียญแล้ว กดขอสัญญาณใหม่ได้เลยครับ คราวนี้วนสลับเหรียญให้แน่นอนครับนาย!", 
+        "🚀 **TITAN ALPHA v19.0 ACTIVATED** 🚀\n"
+        "เปิดระบบ Ultimate Sniper มั่นใจค่อยส่งสัญญาณ ไม่มั่นใจตัดทิ้ง ลุยกันใหม่เพื่อกู้พอร์ตคืนครับนาย!", 
         reply_markup=markup,
         parse_mode="Markdown"
     )
@@ -181,11 +175,11 @@ def handle_callbacks(call):
     chat_id = call.message.chat.id
     
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ Sniper Active")
+        bot.answer_callback_query(call.id, "⚡ Alpha Sniper Active")
         return
         
     if call.data == "request_next_signal":
-        bot.answer_callback_query(call.id, "🎯 กำลังสุ่มสแกนหาคู่ที่ใช่ตามสั่ง...")
+        bot.answer_callback_query(call.id, "🎯 กำลังสแกนหาจังหวะทองคำ...")
         generate_signal_on_demand(chat_id)
         return
 
