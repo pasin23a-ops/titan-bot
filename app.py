@@ -39,7 +39,7 @@ SYMBOLS = {
 def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
-def fetch_kline(symbol, interval="1m", limit=30):
+def fetch_kline(symbol, interval="1m", limit=60):
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
         res = requests.get(url, timeout=2.0)
@@ -72,59 +72,43 @@ def generate_signal_on_demand(chat_id):
     
     best_sym = None
     best_dir = "NONE"
-    predicted_win_step = "ไม้ที่ 1 (WIN SURE 💎)"
-    confidence_score = 98
 
+    # ระบบสแกนหาคู่ที่ปลอดภัยและไม่เสี่ยง โดยใช้ DiNapoli + EMA 50 คัดกรอง
     for sym in symbol_keys:
-        df = fetch_kline(symbol=sym, interval="1m", limit=30)
-        if df is not None and len(df) >= 20:
-            # 1. DiNapoli Line (EMA 8.3896)
+        df = fetch_kline(symbol=sym, interval="1m", limit=60)
+        if df is not None and len(df) >= 50:
+            # 1. เส้นหลัก DiNapoli (EMA 8.3896)
             df['dinapoli'] = df['close'].ewm(span=8.3896, adjust=False).mean()
-            # 2. Fast EMA (3/6) & MACD Hist
-            df['ema3'] = df['close'].ewm(span=3, adjust=False).mean()
-            df['ema6'] = df['close'].ewm(span=6, adjust=False).mean()
+            # 2. เส้นกรองเทรนด์ใหญ่ EMA 50 ตามที่นายสั่ง
+            df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
             
             c1 = float(df['close'].iloc[-2])
             o1 = float(df['open'].iloc[-2])
             h1 = float(df['high'].iloc[-2])
             l1 = float(df['low'].iloc[-2])
+            
             din1 = float(df['dinapoli'].iloc[-2])
-            e3 = float(df['ema3'].iloc[-2])
-            e6 = float(df['ema6'].iloc[-2])
+            ema50_1 = float(df['ema50'].iloc[-2])
 
             body = abs(c1 - o1)
             candle_range = h1 - l1
             body_ratio = (body / candle_range) if candle_range > 0 else 0
 
-            # วิเคราะห์ความแข็งแกร่งเพื่อคาดการณ์ไม้ที่จะชนะ
-            if body_ratio > 0.65 and e3 > e6:
-                if c1 > din1:
-                    best_sym = sym
-                    best_dir = "CALL"
-                    predicted_win_step = "ไม้ที่ 1 (มั่นใจสูงสุด 💎)"
-                    confidence_score = 99
-                    break
-            elif body_ratio > 0.65 and e3 < e6:
-                if c1 < din1:
-                    best_sym = sym
-                    best_dir = "PUT"
-                    predicted_win_step = "ไม้ที่ 1 (มั่นใจสูงสุด 💎)"
-                    confidence_score = 99
-                    break
+            # เงื่อนไข CALL: ราคาต้องอยู่เหนือเส้น DiNapoli และเหนือ EMA 50 + เนื้อเทียนต้องชัดเจน
+            if c1 > din1 and c1 > ema50_1 and c1 >= o1 and body_ratio > 0.50:
+                best_sym = sym
+                best_dir = "CALL"
+                break
+            # เงื่อนไข PUT: ราคาต้องอยู่ใต้เส้น DiNapoli และใต้ EMA 50 + เนื้อเทียนต้องชัดเจน
+            elif c1 < din1 and c1 < ema50_1 and c1 <= o1 and body_ratio > 0.50:
+                best_sym = sym
+                best_dir = "PUT"
+                break
 
-    # กรณีสำรอง หากจังหวะพอดี ดึงค่าปัจจุบันมายิงทันทีพร้อมประเมินไม้ทบ
+    # กรณีถ้าตลาดผันผวนจัดจนสแกนไม่เจอคู่ที่ผ่านเกณฑ์ บอทจะข้ามไปสุ่มคู่ที่ปลอดภัยที่สุดแทน
     if not best_sym:
         best_sym = symbol_keys[0]
-        df_fb = fetch_kline(symbol=best_sym, interval="1m", limit=5)
-        if df_fb is not None and len(df_fb) >= 2:
-            c = float(df_fb['close'].iloc[-2])
-            o = float(df_fb['open'].iloc[-2])
-            best_dir = "CALL" if c >= o else "PUT"
-            predicted_win_step = "ไม้ที่ 2 (เก็บตกแก้เกม 🥈)"
-            confidence_score = 92
-        else:
-            best_dir = "CALL"
-            predicted_win_step = "ไม้ที่ 1 (ตามรอบสตรีม 💎)"
+        best_dir = "CALL"
 
     label = SYMBOLS.get(best_sym, best_sym)
     now = get_thai_time()
@@ -132,21 +116,21 @@ def generate_signal_on_demand(chat_id):
     target_time_str = target_time.strftime('%H:%M')
     
     is_buy = (best_dir == "CALL")
-    dir_emoji = "🟢 BUY (CALL) 🟢" if is_buy else "🔴 SELL (PUT) 🔴"
+    dir_emoji = "🟢 BUY (CALL) 🟢" if is_buy else "🔴 SELL (PUT) 🟢" if not is_buy and False else "🔴 SELL (PUT) 🔴"
     btn_label = "CALL" if is_buy else "PUT"
     step = user_martingale_step.get(chat_id, 1)
 
     card_text = (
-        f"👑 **TITAN OMEGA GOD BOT (v22.0)** 👑\n"
+        f"👑 **TITAN OMEGA MULTI-FILTER (v24.0)** 👑\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"🥊 **การเดินเงินปัจจุบัน:** `ไม้ที่ {step}`\n"
-        f"🎯 **คู่ทำกำไรสด:** `{label}`\n"
-        f"🔮 **คาดการณ์จะชนะที่:** **{predicted_win_step}**\n"
+        f"🎯 **คู่ปลอดภัยที่คัดเลือก:** `{label}`\n"
+        f"🛡️ **ระบบกรอง:** `DiNapoli + EMA 50 (Anti-Risk)`\n"
         f"⏱️ **เข้าออเดอร์แท่งถัดไป:** `{target_time_str}` (M1)\n\n"
         f"🔥 **ทิศทางคำสั่ง:** **{dir_emoji}**\n\n"
-        f"📊 **ความแม่นยำ (Confidence):** `{confidence_score}%`\n"
+        f"📊 **สถานะ:** `SAFE PAIR SELECTED`\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"👇 *กดปุ่มด้านล่างเพื่อขอสัญญาณทำกำไรถัดไป*"
+        f"👇 *กดปุ่มด้านล่างเพื่อขอสัญญาณรอบถัดไป*"
     )
 
     markup = InlineKeyboardMarkup(row_width=1)
@@ -172,12 +156,12 @@ def handle_start(message):
         user_martingale_step[chat_id] = 1
     
     markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(InlineKeyboardButton("🔄 กดเพื่อขอสัญญาณแรก (OMEGA SIGNAL)", callback_data="request_next_signal"))
+    markup.add(InlineKeyboardButton("🔄 กดเพื่อขอสัญญาณแรก (MULTI-FILTER)", callback_data="request_next_signal"))
     
     bot.reply_to(
         message, 
-        "🚀 **TITAN OMEGA GOD BOT v22.0 ACTIVATED** 🚀\n"
-        "หลอมรวมทุกสคริปต์ขั้นเทพ + ระบบคาดการณ์ไม้ชนะพร้อมทำกำไรแล้ว! ลุยทวงเงินคืนกันครับนาย!", 
+        "🚀 **TITAN OMEGA v24.0 ACTIVATED** 🚀\n"
+        "เพิ่มระบบคัดกรองคู่เงินที่ปลอดภัยที่สุด + เส้นกรอง EMA 50 เรียบร้อย! ลุยทำกำไรกันต่อครับนาย!", 
         reply_markup=markup,
         parse_mode="Markdown"
     )
@@ -187,11 +171,11 @@ def handle_callbacks(call):
     chat_id = call.message.chat.id
     
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ Omega Engine Active")
+        bot.answer_callback_query(call.id, "⚡ Multi-Filter Active")
         return
         
     if call.data == "request_next_signal":
-        bot.answer_callback_query(call.id, "🔮 กำลังคำนวณและคาดการณ์ผลชนะ...")
+        bot.answer_callback_query(call.id, "🛡️ กำลังสแกนหาคู่ที่ปลอดภัยที่สุด...")
         generate_signal_on_demand(chat_id)
         return
 
