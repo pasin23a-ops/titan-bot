@@ -39,7 +39,7 @@ SYMBOLS = {
 def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
-def fetch_kline(symbol, interval="1m", limit=60):
+def fetch_kline(symbol, interval="1m", limit=30):
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
         res = requests.get(url, timeout=2.0)
@@ -66,71 +66,53 @@ def fetch_kline(symbol, interval="1m", limit=60):
     
     return None
 
-def calculate_rsi(series, period=14):
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / (loss + 1e-9)
-    return 100 - (100 / (1 + rs))
-
 def generate_signal_on_demand(chat_id):
     best_sym = None
     best_dir = "NONE"
-    best_score = 90
-    best_status = "ULTIMATE FILTERED"
+    best_score = 95
+    best_status = "SNIPER ZERO-LAG FILTERED"
 
-    # สแกนหาคู่ที่กราฟยืนยันเทรนด์ชัดเจนที่สุด ห้ามสวนทางเด็ดขาด
     for sym, label in SYMBOLS.items():
-        df = fetch_kline(sym, "1m", 60)
-        if df is None or len(df) < 50:
+        df = fetch_kline(symbol=sym, interval="1m", limit=30)
+        if df is None or len(df) < 20:
             continue
-            
-        df['ema_10'] = df['close'].ewm(span=10, adjust=False).mean()
-        df['ema_20'] = df['close'].ewm(span=20, adjust=False).mean()
-        df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()
-        df['rsi'] = calculate_rsi(df['close'], 14)
 
-        c = float(df['close'].iloc[-2])
-        o = float(df['open'].iloc[-2])
-        c_prev = float(df['close'].iloc[-3])
-        o_prev = float(df['open'].iloc[-3])
+        c1 = float(df['close'].iloc[-2])
+        o1 = float(df['open'].iloc[-2])
+        h1 = float(df['high'].iloc[-2])
+        l1 = float(df['low'].iloc[-2])
 
-        ema10 = float(df['ema_10'].iloc[-2])
-        ema20 = float(df['ema_20'].iloc[-2])
-        ema50 = float(df['ema_50'].iloc[-2])
-        rsi_val = float(df['rsi'].iloc[-2])
+        c2 = float(df['close'].iloc[-3])
+        o2 = float(df['open'].iloc[-3])
+
+        # เช็คแรงส่งแท่งเทียนแบบเนื้อเน้นๆ ห้ามมีไส้ยาวสวนทาง
+        body1 = abs(c1 - o1)
+        range1 = h1 - l1
         
-        if pd.isna(rsi_val):
-            rsi_val = 50.0
-
-        raw_distance = int((abs(c - ema20) / (ema20 + 1e-9)) * 100000)
-
-        # กรองความปลอดภัยขั้นสูงสุด: ห้ามชนแนวปะทะและต้องไปตามทิศทาง EMA50 เท่านั้น
         direction = "NONE"
-        if c > ema50 and c > ema10 and c > ema20 and c >= o and c_prev >= o_prev:
-            direction = "CALL"
-            best_status = f"ULTIMATE UPTREND (RSI: {int(rsi_val)})"
-        elif c < ema50 and c < ema10 and c < ema20 and c <= o and c_prev <= o_prev:
-            direction = "PUT"
-            best_status = f"ULTIMATE DOWNTREND (RSI: {int(rsi_val)})"
+        if range1 > 0 and (body1 / range1) > 0.6:  # แท่งเทียนต้องมีเนื้อหนาพลังสูง
+            if c1 > o1 and c2 > o2:
+                direction = "CALL"
+                best_status = "SNIPER STRONG UPTREND (BODY CONFIRMED)"
+            elif c1 < o1 and c2 < o2:
+                direction = "PUT"
+                best_status = "SNIPER STRONG DOWNTREND (BODY CONFIRMED)"
 
         if direction != "NONE":
             best_sym = sym
             best_dir = direction
-            best_score = max(90, min(170, raw_distance))
             break
 
-    # ถ้าไม่มีคู่ไหนผ่านเกณฑ์เข้มข้น ให้ดึงตัวที่วิ่งตาม EMA50 ชัดเจนที่สุดมาส่ง
+    # กรณีสำรอง หากคู่ไหนบอดี้ยังไม่ชัด ให้จับทิศทางแท่งล่าสุดทันทีเพื่อความรวดเร็วตามสั่ง
     if not best_sym:
         for sym in SYMBOLS.keys():
-            df_t = fetch_kline(sym, "1m", 50)
-            if df_t is not None and len(df_t) > 40:
+            df_t = fetch_kline(symbol=sym, interval="1m", limit=10)
+            if df_t is not None and len(df_t) > 2:
                 c_t = float(df_t['close'].iloc[-2])
-                ema50_t = float(df_t['close'].ewm(span=50, adjust=False).mean().iloc[-2])
-                best_dir = "CALL" if c_t >= ema50_t else "PUT"
+                o_t = float(df_t['open'].iloc[-2])
+                best_dir = "CALL" if c_t >= o_t else "PUT"
                 best_sym = sym
-                best_status = "TREND SYNC (ON-DEMAND)"
-                best_score = 85
+                best_status = "QUICK MOMENTUM SYNC"
                 break
 
     if best_sym and best_dir != "NONE":
@@ -145,10 +127,10 @@ def generate_signal_on_demand(chat_id):
         step = user_martingale_step.get(chat_id, 1)
 
         card_text = (
-            f"⚡ **TITAN AUTO-PILOT (v16.0 On-Demand)** ⚡\n"
+            f"⚡ **TITAN SNIPER (v18.0 Master Guard)** ⚡\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🥊 **การเดินเงิน:** `ไม้ที่ {step}`\n"
-            f"🎯 **คู่คำนวณสด:** `{label}` *(ตามเทรนด์ EMA50)*\n"
+            f"🎯 **คู่คำนวณสด:** `{label}` *(กรองแรงแท่งเทียน)*\n"
             f"⏱️ **เข้าออเดอร์แท่งถัดไป:** `{target_time_str}` (M1)\n\n"
             f"🔥 **ทิศทางคำสั่ง:** **{dir_emoji}**\n\n"
             f"📊 **สถานะ:** `{best_status}`\n"
@@ -179,14 +161,13 @@ def handle_start(message):
     if chat_id not in user_martingale_step:
         user_martingale_step[chat_id] = 1
     
-    # ส่งข้อความต้อนรับพร้อมปุ่มกดขอสัญญาณ
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(InlineKeyboardButton("🔄 กดเพื่อขอสัญญาณแรก (START SIGNAL)", callback_data="request_next_signal"))
     
     bot.reply_to(
         message, 
-        "🚀 **TITAN AUTO-PILOT v16.0 ON-DEMAND ACTIVATED** 🚀\n"
-        "ระบบสั่งการด้วยมือเปิดใช้งานแล้ว! บอทจะไม่ส่งข้อความเองเด็ดขาด จนกว่าคุณจะกดปุ่ม **'ขอสัญญาณรอบถัดไป'** ระบบถึงจะคำนวณและส่งสัญญาณที่กรองอย่างดีให้ทันทีครับ!", 
+        "🚀 **TITAN SNIPER v18.0 ACTIVATED** 🚀\n"
+        "ระบบ On-Demand ตามใจสั่งพร้อมรบ! บอทนิ่งสนิทจนกว่าคุณจะกดปุ่มขอสัญญาณ ลุยกันใหม่อีกตั้งครับนาย!", 
         reply_markup=markup,
         parse_mode="Markdown"
     )
@@ -196,11 +177,11 @@ def handle_callbacks(call):
     chat_id = call.message.chat.id
     
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ On-Demand Active")
+        bot.answer_callback_query(call.id, "⚡ Sniper Active")
         return
         
     if call.data == "request_next_signal":
-        bot.answer_callback_query(call.id, "🔍 กำลังสแกนหาคู่ที่ดีที่สุดตามเทรนด์...")
+        bot.answer_callback_query(call.id, "🎯 กำลังสแกนหาจังหวะคมๆ ตามสั่ง...")
         generate_signal_on_demand(chat_id)
         return
 
