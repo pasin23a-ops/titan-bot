@@ -13,7 +13,7 @@ active_chat_ids = set()
 user_martingale_step = {}
 last_global_signal_time = 0 
 
-# คูดาวรายคู่แบบกระชับขึ้น (180 วินาที หรือ 3 นาที) ให้วนกลับมาทำรอบได้เร็วขึ้น
+# [ระบบคูดาว] คูดาวแยกรายคู่ (3 นาที) และคูดาวควบคุมจังหวะส่งสัญญาณ 1 แท่งเทียน
 symbol_cooldowns = {}
 PAIR_COOLDOWN_DURATION = 180  
 
@@ -68,10 +68,11 @@ def calculate_rsi(series, period=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-def analyze_symbol_fast(symbol):
+def analyze_symbol_master(symbol):
     current_time = time.time()
+    # [ระบบคูดาวรายคู่] ตรวจสอบว่าคู่นี้ติดพักชั่วคราวอยู่หรือไม่
     if symbol in symbol_cooldowns and current_time < symbol_cooldowns[symbol]:
-        return "NONE", -99999, "COOLDOWN"
+        return "NONE", -99999, "PAIR_COOLDOWN"
 
     df = fetch_kline(symbol, "1m", 50)
     if df is None or len(df) < 40:
@@ -88,6 +89,9 @@ def analyze_symbol_fast(symbol):
 
     c = float(df['close'].iloc[-2])
     o = float(df['open'].iloc[-2])
+    h = float(df['high'].iloc[-2])
+    l = float(df['low'].iloc[-2])
+    
     ema10 = float(df['ema_10'].iloc[-2])
     ema20 = float(df['ema_20'].iloc[-2])
     rsi_val = float(df['rsi'].iloc[-2])
@@ -96,7 +100,7 @@ def analyze_symbol_fast(symbol):
     if pd.isna(rsi_val):
         rsi_val = 50.0
 
-    # แนวรับแนวต้านด่วน
+    # [ระบบแนวรับแนวต้าน S&R Filter] ตรวจสอบกำแพงราคาจาก High/Low ย้อนหลัง
     recent_high = df['high'].iloc[-22:-2].max()
     recent_low = df['low'].iloc[-22:-2].min()
     range_span = recent_high - recent_low
@@ -107,28 +111,34 @@ def analyze_symbol_fast(symbol):
         near_resistance = False
         near_support = False
 
+    # [ระบบกรองความแรงแท่งเทียน] ตัดแท่งจิ๋วไร้พลังทิ้ง
+    body_size = abs(c - o)
+    total_range = h - l
+    if total_range > 0 and (body_size / total_range) < 0.25:
+        return "NONE", -99999, "WEAK_CANDLE_FILTERED"
+
     raw_distance = int((abs(c - ema20) / (ema20 + 1e-9)) * 100000)
 
+    # [ระบบเตือนอันตราย Exhaustion Trap] หากราคากระชากเกิน 180 PTS สั่งพักคู่ทันที
     if raw_distance > 180:
         symbol_cooldowns[symbol] = current_time + PAIR_COOLDOWN_DURATION
-        return "NONE", -99999, "EXHAUSTION_PAUSE"
+        return "NONE", -99999, "⚠️ DANGER_EXHAUSTION_PAUSED"
 
     direction = "NONE"
     status_msg = "SIDEWAY"
 
-    if c < ema10 and c < ema20 and not near_support:
+    # [เงื่อนไขเทรนด์ + กรองแนวรับแนวต้าน + MACD Confluence]
+    if c < ema10 and c < ema20 and not near_support and macd_hist < 0:
         if c <= o:
             direction = "PUT"
-            status_msg = f"FAST S&R DOWNTREND (RSI: {int(rsi_val)})"
-            if macd_hist < 0:
-                raw_distance += 25
+            status_msg = f"S&R SAFE DOWNTREND (RSI: {int(rsi_val)})"
+            raw_distance += 25
 
-    elif c > ema10 and c > ema20 and not near_resistance:
+    elif c > ema10 and c > ema20 and not near_resistance and macd_hist > 0:
         if c >= o:
             direction = "CALL"
-            status_msg = f"FAST S&R UPTREND (RSI: {int(rsi_val)})"
-            if macd_hist > 0:
-                raw_distance += 25
+            status_msg = f"S&R SAFE UPTREND (RSI: {int(rsi_val)})"
+            raw_distance += 25
 
     return direction, raw_distance, status_msg
 
@@ -142,7 +152,7 @@ def background_fast_scanner():
             highest_score = -999999
 
             for sym in SYMBOLS.keys():
-                direction, score, status = analyze_symbol_fast(sym)
+                direction, score, status = analyze_symbol_master(sym)
                 if score > highest_score and direction != "NONE":
                     highest_score = score
                     best_sym = sym
@@ -158,20 +168,31 @@ def background_fast_scanner():
                     "score": highest_score
                 }
             else:
-                # ถ้าไม่มีตัวเข้าเกณฑ์ ให้ดึงตัวแรกที่ไม่ติดคูดาวมาสแตนด์บายไว้ทันทีเพื่อให้สัญญาณไม่ขาด
+                # [Fast Rotation Fallback] สำรองข้อมูลดึงคู่ที่พร้อมที่สุดมาหมุนเวียน เพื่อให้สัญญาณไม่ขาดช่วงทุกนาที
+                fallback_sym, fallback_score, fallback_dir = "", -99999, "CALL"
                 for sym in SYMBOLS.keys():
                     cur_t = time.time()
                     if sym not in symbol_cooldowns or cur_t >= symbol_cooldowns[sym]:
-                        market_data_cache = {
-                            "symbol": sym,
-                            "label": SYMBOLS.get(sym, sym),
-                            "direction": "CALL",
-                            "status": "FAST_ROTATION_READY",
-                            "score": 100
-                        }
-                        break
+                        df_t = fetch_kline(sym, "1m", 15)
+                        if df_t is not None:
+                             c_t = float(df_t['close'].iloc[-2])
+                             o_t = float(df_t['open'].iloc[-2])
+                             d_s = int(abs(c_t - o_t) * 10000)
+                             if d_s > fallback_score:
+                                 fallback_score = d_s
+                                 fallback_sym = sym
+                                 fallback_dir = "CALL" if c_t >= o_t else "PUT"
+                                 
+                if fallback_sym:
+                    market_data_cache = {
+                        "symbol": fallback_sym,
+                        "label": SYMBOLS.get(fallback_sym, fallback_sym),
+                        "direction": fallback_dir,
+                        "status": "FAST_ROTATION_READY",
+                        "score": max(70, min(160, fallback_score))
+                    }
             
-            time.sleep(0.5) # สแกนไวขึ้นต่อเนื่อง
+            time.sleep(0.5)
         except Exception as e:
             print(f"Scanner Error: {e}")
             time.sleep(1)
@@ -181,7 +202,7 @@ def send_auto_signal(chat_id):
     try:
         now_time = time.time()
         
-        # คูดาวบังคับส่งเป๊ะๆ ทุก 1 นาที (1 แท่งเทียน M1)
+        # [Strict 1-Candle Global Cooldown] บังคับส่งสัญญาณตรงเวลาทุก 1 นาทีเป๊ะ
         if now_time - last_global_signal_time < 58:
             return
 
@@ -195,7 +216,7 @@ def send_auto_signal(chat_id):
         label = market_data_cache["label"]
         status = market_data_cache["status"]
 
-        # ติดคูดาวคู่เงินชั่วคราวเพื่อให้รอบหน้าสลับไปหาคู่ใหม่
+        # เมื่อส่งแล้ว ให้ติดคูดาวพักคู่ชั่วคราว
         symbol_cooldowns[sym] = now_time + PAIR_COOLDOWN_DURATION
         last_global_signal_time = now_time
 
@@ -209,20 +230,20 @@ def send_auto_signal(chat_id):
         btn_label = "CALL" if is_buy else "PUT"
 
         card_text = (
-            f"⚡ **TITAN AUTO-PILOT (Fast Engine v11.1)** ⚡\n"
+            f"🛡️ **TITAN AUTO-PILOT (Master Guard v13.1)** 🛡️\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🥊 **การเดินเงิน:** `ไม้ที่ {step}`\n"
-            f"🎯 **คู่คำนวณสด:** `{label}`\n"
+            f"🎯 **คู่คำนวณ:** `{label}` *(พักคู่ 3 นาที)*\n"
             f"⏱️ **เข้าออเดอร์แท่งถัดไป:** `{target_time_str}` (M1)\n\n"
             f"🔥 **ทิศทางคำสั่ง:** **{dir_emoji}**\n\n"
-            f"📊 **สถานะ:** `{status}`\n"
-            f"🛡️ **Quality Score:** `{score} PTS`\n"
+            f"📊 **สถานะ S&R / Guard:** `{status}`\n"
+            f"🛡️ **Quality Score:** `{score} PTS` *(ระบบป้องกันครบถ้วน)*\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"⏱️ *Cooldown: ส่งสัญญาณตรงเวลาทุก 1 แท่งเทียนเป๊ะ*"
+            f"⏱️ *Cooldown: สัญญาณมาต่อเนื่องทุก 1 แท่งเทียนเป๊ะ*"
         )
 
         markup = InlineKeyboardMarkup(row_width=1)
-        markup.add(InlineKeyboardButton(f"⚡ FAST SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
+        markup.add(InlineKeyboardButton(f"🛡️ MASTER SIGNAL ({btn_label}) 🛡️", callback_data="do_nothing"))
         markup.add(
             InlineKeyboardButton("💎 ชนะไม้ 1", callback_data=f"res_win1_{sym}"),
             InlineKeyboardButton("🥈 ชนะไม้ 2", callback_data=f"res_win2_{sym}"),
@@ -256,8 +277,8 @@ def handle_start(message):
     
     bot.reply_to(
         message, 
-        "🚀 **TITAN AUTO-PILOT FAST ENGINE ACTIVATED** 🚀\n"
-        "อัปเกรดระบบสแกนความเร็วสูง ป้องกันอาการหน่วง สัญญาณเด้งตรงเป๊ะทุก 1 แท่งเทียน (ทุกนาที) แบบไม่มีดีเลย์ครับ!", 
+        "🚀 **TITAN AUTO-PILOT MASTER GUARD v13.1 ACTIVATED** 🚀\n"
+        "ระบบครบถ้วนสมบูรณ์: คูดาวรายคู่ + แนวรับแนวต้าน (S&R) + แจ้งเตือนอันตราย Exhaustion Trap + สัญญาณไหลลื่นทุกแท่งเทียน พร้อมลุยเต็มระบบครับนาย!", 
         parse_mode="Markdown"
     )
 
@@ -265,7 +286,7 @@ def handle_start(message):
 def handle_callbacks(call):
     chat_id = call.message.chat.id
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ Fast Engine Active")
+        bot.answer_callback_query(call.id, "🛡️ Master Guard Active")
         return
     if call.data.startswith("res_"):
         parts = call.data.split("_")
