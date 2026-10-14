@@ -13,7 +13,9 @@ active_chat_ids = set()
 user_martingale_step = {}
 last_global_signal_time = 0 
 
-# [ลบการบล็อกรายคู่เหรียญออกแล้ว] อนุญาตให้สแกนและเลือกคู่ที่ดีที่สุดได้ทุกแท่งเทียนทันที
+# ระบบคูดาวแยกรายคู่เหรียญชั่วคราว (เมื่อเจอจุดอันตรายหรือพึ่งส่งสัญญาณ จะพักคู่รอนิ่งแล้วค่อยกลับมาคำนวณใหม่)
+symbol_cooldowns = {}
+PAIR_COOLDOWN_DURATION = 240  # พักคู่เหรียญที่มีปัญหาหรือพิ่งส่ง 4 นาที
 
 SYMBOLS = {
     "DYDXUSDT": "DYDX(OTC)",
@@ -39,18 +41,19 @@ SYMBOLS = {
     "XAGUSDT": "XAGUSD(OTC)"
 }
 
-best_autopilot_cache = {
+# ตัวแปรเก็บผลลัพธ์ที่คำนวณล่วงหน้าสำหรับแท่งถัดไป (Look-ahead Cache)
+next_candle_cache = {
     "symbol": "",
     "label": "",
     "direction": "NONE",
-    "status": "CONTINUOUS_FLOW_ACTIVE",
+    "status": "CALCULATING_AHEAD",
     "score": 0
 }
 
 def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
-def fetch_kline(symbol, interval="1m", limit=40):
+def fetch_kline(symbol, interval="1m", limit=50):
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
         res = requests.get(url, timeout=2.5)
@@ -85,9 +88,14 @@ def calculate_rsi(series, period=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-def analyze_autopilot(symbol):
-    df = fetch_kline(symbol, "1m", 40)
-    if df is None or len(df) < 30:
+def analyze_autopilot_advanced(symbol):
+    current_time = time.time()
+    # เช็คว่าคู่ไหนติดคูดาวอันตรายชั่วคราวอยู่หรือไม่
+    if symbol in symbol_cooldowns and current_time < symbol_cooldowns[symbol]:
+        return "NONE", -99999, "PAIR_TEMPORARY_COOLDOWN"
+
+    df = fetch_kline(symbol, "1m", 50)
+    if df is None or len(df) < 40:
         return "NONE", 0, "DATA_ERROR"
 
     df['ema_10'] = df['close'].ewm(span=10, adjust=False).mean()
@@ -103,6 +111,7 @@ def analyze_autopilot(symbol):
     o = float(df['open'].iloc[-2])
     h = float(df['high'].iloc[-2])
     l = float(df['low'].iloc[-2])
+    
     ema10 = float(df['ema_10'].iloc[-2])
     ema20 = float(df['ema_20'].iloc[-2])
     rsi_val = float(df['rsi'].iloc[-2])
@@ -111,35 +120,55 @@ def analyze_autopilot(symbol):
     if pd.isna(rsi_val):
         rsi_val = 50.0
 
+    # [ADVANCED SUPPORT & RESISTANCE CHECK] คำนวณแนวรับแนวต้านจาก High / Low ย้อนหลัง 20 แท่ง
+    recent_high = df['high'].iloc[-22:-2].max()
+    recent_low = df['low'].iloc[-22:-2].min()
+
+    # ถ้า้าราคาอยู่ใกล้แนวต้านหรือแนวรับมากๆ (เสี่ยงชนกำแพง) ให้ตีตกเป็นอันตรายทันที
+    range_span = recent_high - recent_low
+    if range_span > 0:
+        distance_to_high = (recent_high - c) / range_span
+        distance_to_low = (c - recent_low) / range_span
+        
+        # หากใกล้แนวต้านเกินไป (< 3%) ห้ามกด CALL
+        # หากใกล้แนวรับเกินไป (< 3%) ห้ามกด PUT
+        near_resistance = distance_to_high < 0.03
+        near_support = distance_to_low < 0.03
+    else:
+        near_resistance = False
+        near_support = False
+
     raw_distance = int((abs(c - ema20) / (ema20 + 1e-9)) * 100000)
 
-    # Smart Penalty ป้องกันเคสลากไส้แตก แต่ไม่บล็อกทิ้ง
+    # Smart Penalty & Danger Shield: ถ้าค่า PTS สูงเกิน 180 หรือเจอภาวะลากไส้ ให้หักคะแนนหนักและสั่งพักคู่เหรียญนี้ชั่วคราว
     quality_score = raw_distance
     if raw_distance > 180:
-        excess = raw_distance - 180
-        quality_score = max(20, 180 - (excess * 2))
+        # สั่งติดคูดาวพักคู่เหรียญนี้ทันที 4 นาที ป้องกันติดกับดักลากซ้ำ
+        symbol_cooldowns[symbol] = current_time + PAIR_COOLDOWN_DURATION
+        return "NONE", -99999, "DANGER_EXHAUSTION_PAUSED"
 
     direction = "NONE"
     status_msg = "SIDEWAY"
 
-    # เงื่อนไขยืดหยุ่นเพื่อให้สัญญาณออกต่อเนื่องทุกแท่ง
-    if c < ema10 and c < ema20:
+    # เงื่อนไขการออกออเดอร์พร้อมกรองแนวรับแนวต้าน
+    if c < ema10 and c < ema20 and not near_support:
         if c <= o:
             direction = "PUT"
-            status_msg = f"FLOW DOWNTREND (RSI: {int(rsi_val)})"
+            status_msg = f"S&R SAFE DOWNTREND (RSI: {int(rsi_val)})"
             if macd_hist < 0:
-                quality_score += 20
-    elif c > ema10 and c > ema20:
+                quality_score += 25
+
+    elif c > ema10 and c > ema20 and not near_resistance:
         if c >= o:
             direction = "CALL"
-            status_msg = f"FLOW UPTREND (RSI: {int(rsi_val)})"
+            status_msg = f"S&R SAFE UPTREND (RSI: {int(rsi_val)})"
             if macd_hist > 0:
-                quality_score += 20
+                quality_score += 25
 
     return direction, quality_score, status_msg
 
-def background_scanner():
-    global best_autopilot_cache
+def background_lookahead_scanner():
+    global next_candle_cache
     while True:
         try:
             top_sym = None
@@ -147,8 +176,9 @@ def background_scanner():
             top_status = "SCANNING"
             highest_score = -999999
 
+            # คำนวณและประเมินล่วงหน้าทุกลมหายใจ เพื่อเลือกคู่ที่ดีที่สุดรอไว้สำหรับแท่งถัดไป
             for sym in SYMBOLS.keys():
-                direction, score, status = analyze_autopilot(sym)
+                direction, score, status = analyze_autopilot_advanced(sym)
                 if score > highest_score and direction != "NONE":
                     highest_score = score
                     top_sym = sym
@@ -156,7 +186,7 @@ def background_scanner():
                     top_status = status
 
             if top_sym and top_dir != "NONE":
-                best_autopilot_cache = {
+                next_candle_cache = {
                     "symbol": top_sym,
                     "label": SYMBOLS.get(top_sym, top_sym),
                     "direction": top_dir,
@@ -164,16 +194,13 @@ def background_scanner():
                     "score": highest_score
                 }
             else:
-                # กรณีฉุกเฉิน บังคับหยิบตัวแรกมาส่งทันทีเพื่อให้สัญญาณไม่ขาดช่วง
-                for sym in SYMBOLS.keys():
-                    best_autopilot_cache = {
-                        "symbol": sym,
-                        "label": SYMBOLS.get(sym, sym),
-                        "direction": "CALL",
-                        "status": "FORCE_FLOW_ACTIVE",
-                        "score": 100
-                    }
-                    break
+                next_candle_cache = {
+                    "symbol": "",
+                    "label": "",
+                    "direction": "NONE",
+                    "status": "WAITING_SAFE_SETUP",
+                    "score": 0
+                }
             
             time.sleep(1)
         except Exception as e:
@@ -185,20 +212,22 @@ def send_auto_signal(chat_id):
     try:
         now_time = time.time()
         
-        # คูดาวควบคุมให้ส่ง 1 ครั้งต่อ 1 นาที (1 แท่งเทียน M1) เป๊ะๆ
+        # [STRICT 1-CANDLE INTERVAL] ล็อกเวลาส่งสัญญาณ 1 ครั้งต่อ 1 นาที (1 แท่ง M1) เป๊ะๆ
         if now_time - last_global_signal_time < 60:
             return
 
-        direction = best_autopilot_cache["direction"]
-        score = best_autopilot_cache["score"]
+        direction = next_candle_cache["direction"]
+        score = next_candle_cache["score"]
 
         if direction == "NONE":
             return
 
-        sym = best_autopilot_cache["symbol"]
-        label = best_autopilot_cache["label"]
-        status = best_autopilot_cache["status"]
+        sym = next_candle_cache["symbol"]
+        label = next_candle_cache["label"]
+        status = next_candle_cache["status"]
 
+        # เมื่อส่งสัญญาณแล้ว ให้ติดคูดาวคู่เหรียญนี้ชั่วคราว เพื่อให้บอทรอบหน้าไปคำนวณหาคู่ใหม่ที่สดกว่า
+        symbol_cooldowns[sym] = now_time + PAIR_COOLDOWN_DURATION
         last_global_signal_time = now_time
 
         step = user_martingale_step.get(chat_id, 1)
@@ -211,20 +240,20 @@ def send_auto_signal(chat_id):
         btn_label = "CALL" if is_buy else "PUT"
 
         card_text = (
-            f"⚡ **TITAN AUTO-PILOT (Continuous Flow v10.2)** ⚡\n"
+            f"🛡️ **TITAN AUTO-PILOT (Advanced S&R v11.0)** 🛡️\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🥊 **การเดินเงิน:** `ไม้ที่ {step}`\n"
-            f"🎯 **คู่ตามเทรนด์:** `{label}` *(ไม่พักคู่เงิน วนซ้ำได้ตลอด)*\n"
+            f"🎯 **คู่คำนวณล่วงหน้า:** `{label}` *(พักคู่ชั่วคราวหลังส่ง)*\n"
             f"⏱️ **เข้าออเดอร์แท่งถัดไป:** `{target_time_str}` (M1)\n\n"
             f"🔥 **ทิศทางคำสั่ง:** **{dir_emoji}**\n\n"
-            f"📊 **สถานะเทรนด์:** `{status}`\n"
-            f"🛡️ **Quality Score:** `{score} PTS`\n"
+            f"📊 **สถานะแนวรับแนวต้าน:** `{status}`\n"
+            f"🛡️ **Quality Score:** `{score} PTS` *(คำนวณล่วงหน้าสมบูรณ์)*\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"⏱️ *Cooldown: พักสัญญาณแค่ 1 แท่งเทียน (ส่งทุกนาที)*"
+            f"⏱️ *Cooldown: ล็อกสัญญาณ 1 แท่งเทียนเป๊ะ + กรอง S&R*"
         )
 
         markup = InlineKeyboardMarkup(row_width=1)
-        markup.add(InlineKeyboardButton(f"⚡ 1-CANDLE SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
+        markup.add(InlineKeyboardButton(f"🛡️ S&R PRECISE SIGNAL ({btn_label}) 🛡️", callback_data="do_nothing"))
         markup.add(
             InlineKeyboardButton("💎 ชนะไม้ 1", callback_data=f"res_win1_{sym}"),
             InlineKeyboardButton("🥈 ชนะไม้ 2", callback_data=f"res_win2_{sym}"),
@@ -258,8 +287,8 @@ def handle_start(message):
     
     bot.reply_to(
         message, 
-        "🚀 **TITAN AUTO-PILOT v10.2 ACTIVATED** 🚀\n"
-        "ยกเลิกการบล็อกคู่เงินเรียบร้อย! สแกนและส่งสัญญาณต่อเนื่องทุก 1 แท่งเทียน (ทุกนาที) แบบจัดเต็มไม่มีสะดุดครับ!", 
+        "🚀 **TITAN AUTO-PILOT ADVANCED S&R ACTIVATED** 🚀\n"
+        "ระบบประมวลผลล่วงหน้า (Look-ahead) พร้อมระบบตรวจสอบแนวรับแนวต้าน + พักคู่เหรียญอันตรายชั่วคราว ล็อกสัญญาณเข้มงวด 1 แท่งเทียนเป๊ะ พร้อมลุยแล้วครับนาย!", 
         parse_mode="Markdown"
     )
 
@@ -267,7 +296,7 @@ def handle_start(message):
 def handle_callbacks(call):
     chat_id = call.message.chat.id
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ 1-Candle Active")
+        bot.answer_callback_query(call.id, "🛡️ S&R Shield Active")
         return
     if call.data.startswith("res_"):
         parts = call.data.split("_")
@@ -280,7 +309,8 @@ def handle_callbacks(call):
             user_martingale_step[chat_id] = 1 if step >= 3 else step + 1
             bot.answer_callback_query(call.id, f"⚠️ LOSS! ขยับเป็นไม้ {user_martingale_step[chat_id]}")
 
-threading.Thread(target=background_scanner, daemon=True).start()
+# รันเธรดเบื้องหลังสำหรับคำนวณล่วงหน้า
+threading.Thread(target=background_lookahead_scanner, daemon=True).start()
 threading.Thread(target=auto_broadcaster, daemon=True).start()
 
 while True:
