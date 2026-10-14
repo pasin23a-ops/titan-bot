@@ -5,6 +5,7 @@ import datetime
 import time
 import requests
 import threading
+import random
 
 BOT_TOKEN = "8316396699:AAHff4bp0RbvYJjx-eOhuUqr4kgD-MERj-c"
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -70,9 +71,13 @@ def generate_signal_on_demand(chat_id):
     best_sym = None
     best_dir = "NONE"
     best_score = 95
-    best_status = "SNIPER ZERO-LAG FILTERED"
+    best_status = "SNIPER RANDOMIZED FILTER"
 
-    for sym, label in SYMBOLS.items():
+    # สลับลำดับคู่เหรียญแบบสุ่มทุกครั้งที่กด เพื่อไม่ให้ค้างคาอยู่ที่คู่เดิมซ้ำๆ
+    symbol_keys = list(SYMBOLS.keys())
+    random.shuffle(symbol_keys)
+
+    for sym in symbol_keys:
         df = fetch_kline(symbol=sym, interval="1m", limit=30)
         if df is None or len(df) < 20:
             continue
@@ -85,34 +90,33 @@ def generate_signal_on_demand(chat_id):
         c2 = float(df['close'].iloc[-3])
         o2 = float(df['open'].iloc[-3])
 
-        # เช็คแรงส่งแท่งเทียนแบบเนื้อเน้นๆ ห้ามมีไส้ยาวสวนทาง
         body1 = abs(c1 - o1)
         range1 = h1 - l1
         
         direction = "NONE"
-        if range1 > 0 and (body1 / range1) > 0.6:  # แท่งเทียนต้องมีเนื้อหนาพลังสูง
+        if range1 > 0 and (body1 / range1) > 0.5:
             if c1 > o1 and c2 > o2:
                 direction = "CALL"
-                best_status = "SNIPER STRONG UPTREND (BODY CONFIRMED)"
+                best_status = "SNIPER UPTREND (BODY CONFIRMED)"
             elif c1 < o1 and c2 < o2:
                 direction = "PUT"
-                best_status = "SNIPER STRONG DOWNTREND (BODY CONFIRMED)"
+                best_status = "SNIPER DOWNTREND (BODY CONFIRMED)"
 
         if direction != "NONE":
             best_sym = sym
             best_dir = direction
             break
 
-    # กรณีสำรอง หากคู่ไหนบอดี้ยังไม่ชัด ให้จับทิศทางแท่งล่าสุดทันทีเพื่อความรวดเร็วตามสั่ง
+    # กรณีสำรอง สุ่มหยิบเหรียญที่ไม่ซ้ำเดิมมาออกผลทันที
     if not best_sym:
-        for sym in SYMBOLS.keys():
+        for sym in symbol_keys:
             df_t = fetch_kline(symbol=sym, interval="1m", limit=10)
             if df_t is not None and len(df_t) > 2:
                 c_t = float(df_t['close'].iloc[-2])
                 o_t = float(df_t['open'].iloc[-2])
                 best_dir = "CALL" if c_t >= o_t else "PUT"
                 best_sym = sym
-                best_status = "QUICK MOMENTUM SYNC"
+                best_status = "RANDOMIZED MOMENTUM SYNC"
                 break
 
     if best_sym and best_dir != "NONE":
@@ -127,10 +131,10 @@ def generate_signal_on_demand(chat_id):
         step = user_martingale_step.get(chat_id, 1)
 
         card_text = (
-            f"⚡ **TITAN SNIPER (v18.0 Master Guard)** ⚡\n"
+            f"⚡ **TITAN SNIPER (v18.1 Randomized)** ⚡\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🥊 **การเดินเงิน:** `ไม้ที่ {step}`\n"
-            f"🎯 **คู่คำนวณสด:** `{label}` *(กรองแรงแท่งเทียน)*\n"
+            f"🎯 **คู่คำนวณสด:** `{label}` *(สุ่มกระจายทุกเหรียญ)*\n"
             f"⏱️ **เข้าออเดอร์แท่งถัดไป:** `{target_time_str}` (M1)\n\n"
             f"🔥 **ทิศทางคำสั่ง:** **{dir_emoji}**\n\n"
             f"📊 **สถานะ:** `{best_status}`\n"
@@ -166,8 +170,8 @@ def handle_start(message):
     
     bot.reply_to(
         message, 
-        "🚀 **TITAN SNIPER v18.0 ACTIVATED** 🚀\n"
-        "ระบบ On-Demand ตามใจสั่งพร้อมรบ! บอทนิ่งสนิทจนกว่าคุณจะกดปุ่มขอสัญญาณ ลุยกันใหม่อีกตั้งครับนาย!", 
+        "🚀 **TITAN SNIPER v18.1 ACTIVATED** 🚀\n"
+        "อัปเกรดระบบสุ่มกระจายคู่เหรียญแล้ว กดขอสัญญาณใหม่ได้เลยครับ คราวนี้วนสลับเหรียญให้แน่นอนครับนาย!", 
         reply_markup=markup,
         parse_mode="Markdown"
     )
@@ -181,7 +185,7 @@ def handle_callbacks(call):
         return
         
     if call.data == "request_next_signal":
-        bot.answer_callback_query(call.id, "🎯 กำลังสแกนหาจังหวะคมๆ ตามสั่ง...")
+        bot.answer_callback_query(call.id, "🎯 กำลังสุ่มสแกนหาคู่ที่ใช่ตามสั่ง...")
         generate_signal_on_demand(chat_id)
         return
 
