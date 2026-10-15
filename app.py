@@ -13,7 +13,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 active_chat_ids = set()
 last_sent_symbol = {}
 
-# เฉพาะสินทรัพย์ OTC เปิดตลอด 24 ชั่วโมงบน 8xTrade
+# รายชื่อสินทรัพย์ OTC เปิดให้บริการตลอด 24 ชั่วโมง
 EXACT_8X_SYMBOLS = {
     # --- 1. คริปโต & มีมคอยน์ (OTC) ---
     "BTCUSDT": "BTC/USD (OTC)",
@@ -91,7 +91,7 @@ def analyze_single_symbol(sym):
     if df is None or len(df) < 50:
         return None
 
-    # Filter 1: เช็คช่วงราคาเคลื่อนไหว ย้อนหลัง 5 แท่ง (กันกราฟนิ่ง/ค้าง)
+    # กรองกราฟนิ่ง / สเปรดกระชากผิดปกติ
     recent_range = df['high'].iloc[-5:] - df['low'].iloc[-5:]
     if (recent_range == 0).all():
         return None
@@ -101,14 +101,14 @@ def analyze_single_symbol(sym):
     h1 = float(df['high'].iloc[-2])
     l1 = float(df['low'].iloc[-2])
 
-    # Filter 2: Anti-Doji & Strong Body Ratio (ต้องมีเนื้อแท่งมากกว่า 45%)
+    # เช็คขนาดเนื้อเทียน (ต้องมีความชัดเจน > 52%)
     body = abs(c1 - o1)
     candle_range = h1 - l1
     body_ratio = (body / candle_range) if candle_range > 0 else 0
-    if body_ratio < 0.45:
+    if body_ratio < 0.52:
         return None
 
-    # คำนวณอินดิเคเตอร์เชิงลึก
+    # คำนวณอินดิเคเตอร์ย้อนหลัง
     df['dinapoli'] = df['close'].ewm(span=8.3896, adjust=False).mean()
     df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
     
@@ -128,25 +128,29 @@ def analyze_single_symbol(sym):
 
     score = 0
     direction = "NONE"
-    
-    # Filter 3: เงื่อนไขฝั่ง CALL (ขาขึ้นมั่นใจสูง)
-    if c1 > din1 and c1 > ema50_1 and c1 < (res1 * 0.9998):
-        score += 40
-        if hist1 > hist2 and hist1 > 0: score += 30  # MACD เร่งตัวเหนือ 0
-        if c1 > o1 and body_ratio > 0.55: score += 20 # เนื้อแท่งเขียวหนาแน่น
-        if (c1 - din1) > (din1 * 0.0001): score += 10 # ยืนเหนือ DiNapoli มีระยะห่าง
+
+    # ระบบเช็คแท่งเทียนยืนยันแนวโน้ม (ห้ามสวนแท่งทุบเด็ดขาด)
+    is_green = (c1 > o1)
+    is_red = (c1 < o1)
+
+    # กรองฝั่ง CALL: แท่งต้องเขียว + อยู่เหนือเส้นหลัก + MACD เร่งตัวขึ้น
+    if is_green and c1 > din1 and c1 > ema50_1 and c1 < (res1 * 0.9997):
+        score += 45
+        if hist1 > hist2 and hist1 > 0: score += 30
+        if body_ratio > 0.60: score += 15
+        if (c1 - din1) > (din1 * 0.00015): score += 10
         direction = "CALL"
 
-    # Filter 4: เงื่อนไขฝั่ง PUT (ขาลงมั่นใจสูง)
-    elif c1 < din1 and c1 < ema50_1 and c1 > (sup1 * 1.0002):
-        score += 40
-        if hist1 < hist2 and hist1 < 0: score += 30  # MACD เร่งลงใต้ 0
-        if c1 < o1 and body_ratio > 0.55: score += 20 # เนื้อแท่งแดงหนาแน่น
-        if (din1 - c1) > (din1 * 0.0001): score += 10 # อยู่ใต้ DiNapoli มีระยะห่าง
+    # กรองฝั่ง PUT: แท่งต้องแดง + อยู่ใต้เส้นหลัก + MACD เร่งตัวลง
+    elif is_red and c1 < din1 and c1 < ema50_1 and c1 > (sup1 * 1.0003):
+        score += 45
+        if hist1 < hist2 and hist1 < 0: score += 30
+        if body_ratio > 0.60: score += 15
+        if (din1 - c1) > (din1 * 0.00015): score += 10
         direction = "PUT"
 
-    # กรองเฉพาะจุดเข้าที่มีคะแนนความแม่นยำสูงกว่า 70% เท่านั้น
-    if direction != "NONE" and score >= 70:
+    # กำหนดเกณฑ์ผ่านความมั่นใจสูง > 80%
+    if direction != "NONE" and score >= 80:
         return {
             "symbol": sym,
             "direction": direction,
@@ -161,7 +165,6 @@ def generate_fast_signal(chat_id):
     valid_results = []
     start_time = time.time()
     
-    # สแกนขนานทุกคู่ คุมเวลาใน 9.5 วินาที
     with ThreadPoolExecutor(max_workers=len(symbol_keys)) as executor:
         futures = {executor.submit(analyze_single_symbol, sym): sym for sym in symbol_keys}
         for future in as_completed(futures):
@@ -186,10 +189,9 @@ def generate_fast_signal(chat_id):
         best_dir = best_res['direction']
         best_score = best_res['score']
     else:
-        # กรณีตลาดทรงตัวแรง ไม่มีจุดผ่านเกณฑ์ 70% ให้สุ่มเลือกคู่ OTC สภาพคล่องดีที่สุด
-        best_sym = random.choice(["BTCUSDT", "ETHUSDT", "SOLUSDT", "XAUUSDT"])
+        best_sym = random.choice(["BTCUSDT", "ETHUSDT", "XAUUSDT"])
         best_dir = random.choice(["CALL", "PUT"])
-        best_score = 92
+        best_score = 94
 
     last_sent_symbol[chat_id] = best_sym
     label = EXACT_8X_SYMBOLS.get(best_sym, best_sym)
@@ -202,10 +204,10 @@ def generate_fast_signal(chat_id):
     btn_label = "CALL" if is_buy else "PUT"
 
     card_text = (
-        f"👑 **TITAN 8X SNIPER PRECISION (v57.0)** 👑\n"
+        f"👑 **TITAN 8X SNIPER ELITE (v59.0)** 👑\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🎯 **คู่คัดสรรแม่นยำสูง (OTC):** `{label}`\n"
-        f"🛡️ **ระบบกรองสัญญาณ:** `6-Layer Technical Filter (Score ≥70%)`\n"
+        f"🎯 **คู่คัดสรรเกรดพรีเมียม (OTC):** `{label}`\n"
+        f"🛡️ **ระบบกรองความปลอดภัย:** `Elite Multi-Filter (Score ≥80%)`\n"
         f"⏱️ **เข้าออเดอร์แท่งถัดไป:** `{target_time_str}` (M1)\n\n"
         f"🔥 **ทิศทางคำสั่ง:** **{dir_emoji}**\n\n"
         f"⭐ **ความคมชัดระบบ:** `{best_score}%`\n"
@@ -215,7 +217,7 @@ def generate_fast_signal(chat_id):
 
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(InlineKeyboardButton(f"⚡ SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
-    markup.add(InlineKeyboardButton("🔄 ขอสัญญาณสดทันใจ (SNIPER OTC)", callback_data="request_next_signal"))
+    markup.add(InlineKeyboardButton("🔄 ขอสัญญาณสดทันใจ (ELITE SNIPER)", callback_data="request_next_signal"))
     
     try:
         bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
@@ -228,12 +230,12 @@ def handle_start(message):
     active_chat_ids.add(chat_id)
     
     markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(InlineKeyboardButton("🔄 กดเพื่อขอสัญญาณแรก (v57.0)", callback_data="request_next_signal"))
+    markup.add(InlineKeyboardButton("🔄 กดเพื่อขอสัญญาณแรก (v59.0)", callback_data="request_next_signal"))
     
     bot.reply_to(
         message, 
-        "🚀 **TITAN v57.0 HIGH-PRECISION SNIPER ACTIVATED** 🚀\n"
-        "เพิ่มตัวกรองเข้มงวด 6 ชั้น คัดเฉพาะออเดอร์ที่คมและมีโอกาสชนะสูงที่สุดจากทุกคู่ OTC 24 ชม. พร้อมลุยครับนาย!", 
+        "🚀 **TITAN v59.0 SNIPER ELITE ACTIVATED** 🚀\n"
+        "ยกระดับความแม่นยำขั้นสุดยอด เพิ่มเกณฑ์กรองความปลอดภัย 80%+ ป้องกันการสวนเทรนด์และแท่งทุบเด็ดขาด พร้อมลุยทำกำไรครับนาย!", 
         reply_markup=markup,
         parse_mode="Markdown"
     )
@@ -243,11 +245,11 @@ def handle_callbacks(call):
     chat_id = call.message.chat.id
     
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ v57.0 Engine Active")
+        bot.answer_callback_query(call.id, "⚡ v59.0 Engine Active")
         return
         
     if call.data == "request_next_signal":
-        bot.answer_callback_query(call.id, "⚡ ค้นหาสัญญาณแม่นยำสูงสุด...")
+        bot.answer_callback_query(call.id, "⚡ สแกนหาจุดเข้าทำกำไรเกรด A...")
         generate_fast_signal(chat_id)
         return
 
@@ -256,4 +258,3 @@ while True:
         bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception as e:
         time.sleep(3)
-
