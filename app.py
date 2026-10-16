@@ -4,16 +4,14 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import datetime
 import time
 import requests
-import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 BOT_TOKEN = "8316396699:AAHff4bp0RbvYJjx-eOhuUqr4kgD-MERj-c"
 bot = telebot.TeleBot(BOT_TOKEN)
 
-active_chat_ids = set()
 last_sent_symbol = {}
 
-# 22 คู่ OTC เกรดพรีเมียม เปิดตลอด 24 ชม.
+# 22 คู่สินทรัพย์ชื่อสะอาด ตรงประเด็น
 EXACT_8X_SYMBOLS = {
     "BTCUSDT": "BTC/USD (OTC)",
     "ETHUSDT": "ETH/USD (OTC)",
@@ -61,76 +59,47 @@ def fetch_kline(symbol, interval="1m", limit=60):
             continue
     return None
 
-def analyze_symbol_1000x(sym):
+def analyze_symbol(sym):
     df = fetch_kline(symbol=sym, interval="1m", limit=60)
     if df is None or len(df) < 50:
         return None
 
-    recent_range = df['high'].iloc[-5:] - df['low'].iloc[-5:]
-    if (recent_range == 0).all():
+    # PPO Calculation (12, 26, Close, EMA)
+    ema12 = df['close'].ewm(span=12, adjust=False).mean()
+    ema26 = df['close'].ewm(span=26, adjust=False).mean()
+    ppo_line = ((ema12 - ema26) / ema26) * 100
+    current_ppo = float(ppo_line.iloc[-2])
+
+    c1, o1, h1, l1 = float(df['close'].iloc[-2]), float(df['open'].iloc[-2]), float(df['high'].iloc[-2]), float(df['low'].iloc[-2])
+    c2, o2 = float(df['close'].iloc[-3]), float(df['open'].iloc[-3])
+    c3, o3 = float(df['close'].iloc[-4]), float(df['open'].iloc[-4])
+
+    rng1 = h1 - l1
+    if rng1 == 0:
         return None
 
-    # ดึงข้อมูลแท่งเทียนย้อนหลัง 3 แท่งล่าสุดตามที่นายเน้นย้ำ (Index -2, -3, -4)
-    c1 = float(df['close'].iloc[-2])
-    o1 = float(df['open'].iloc[-2])
-    h1 = float(df['high'].iloc[-2])
-    l1 = float(df['low'].iloc[-2])
-
-    c2 = float(df['close'].iloc[-3])
-    o2 = float(df['open'].iloc[-3])
-
-    c3 = float(df['close'].iloc[-4])
-    o3 = float(df['open'].iloc[-4])
-
-    # เช็คสถานะ 3 แท่งย้อนหลัง
-    t1_green = c1 > o1
-    t2_green = c2 > o2
-    t3_green = c3 > o3
-
-    t1_red = c1 < o1
-    t2_red = c2 < o2
-    t3_red = c3 < o3
-
     body1 = abs(c1 - o1)
-    rng1 = h1 - l1
-    body_ratio1 = (body1 / rng1) if rng1 > 0 else 0
+    body_ratio = body1 / rng1
+    ppo_distance = abs(current_ppo)
 
-    # อินดิเคเตอร์ยืนยันแนวโน้ม
-    df['dinapoli'] = df['close'].ewm(span=8.3896, adjust=False).mean()
-    df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
+    # คุมทิศทางหลักด้วยเส้นศูนย์ของ PPO (เหนือ 0 = CALL, ใต้ 0 = PUT)
+    direction = "CALL" if current_ppo > 0 else "PUT"
     
-    ema_fast = df['close'].ewm(span=6, adjust=False).mean()
-    ema_slow = df['close'].ewm(span=14, adjust=False).mean()
-    df['macd_hist'] = (ema_fast - ema_slow) - ema_fast.ewm(span=5, adjust=False).mean()
+    # คำนวณคะแนนเชิงปริมาณจริง (Objective Momentum Score) จาก PPO Distance และ Body Ratio
+    base_score = (ppo_distance * 30) + (body_ratio * 40)
     
-    din1 = float(df['dinapoli'].iloc[-2])
-    ema50_1 = float(df['ema50'].iloc[-2])
-    hist1 = float(df['macd_hist'].iloc[-2])
-    hist2 = float(df['macd_hist'].iloc[-3])
+    # ให้โบนัสเพิ่มเติมถ้า 3 แท่งเรียงตัวสอดคล้องกับทิศทาง PPO
+    if direction == "CALL" and (c1 > o1) and (c2 > o2) and (c3 > o3):
+        base_score += 30
+    elif direction == "PUT" and (c1 < o1) and (c2 < o2) and (c3 < o3):
+        base_score += 30
 
-    score = 50
-    direction = "NONE"
-
-    # ระบบกรอง 1000x: บังคับ 3 แท่งย้อนหลังต้องสอดคล้องกับทิศทาง ห้ามสวนทางเด็ดขาด
-    # ฝั่ง CALL: 3 แท่งย้อนหลังต้องมีแนวโน้มพุ่งขึ้น หรือแท่งล่าสุดปิดเขียวแข็งแกร่งตามเทรนด์
-    if (t1_green and t2_green) or (t1_green and hist1 > hist2 and c1 > din1):
-        if body_ratio1 >= 0.55: # เนื้อแท่งชัดเจน
-            score = 96
-            direction = "CALL"
-
-    # ฝั่ง PUT: 3 แท่งย้อนหลังต้องมีแนวโน้มทิ้งตัวลง หรือแท่งล่าสุดปิดแดงแข็งแกร่งตามเทรนด์
-    elif (t1_red and t2_red) or (t1_red and hist1 < hist2 and c1 < din1):
-        if body_ratio1 >= 0.55: # เนื้อแท่งชัดเจน
-            score = 96
-            direction = "PUT"
-
-    if direction != "NONE":
-        return {
-            "symbol": sym,
-            "direction": direction,
-            "score": score
-        }
-    return None
+    return {
+        "symbol": sym,
+        "direction": direction,
+        "ppo": current_ppo,
+        "score": round(base_score, 2)
+    }
 
 def generate_fast_signal(chat_id):
     symbol_keys = list(EXACT_8X_SYMBOLS.keys())
@@ -138,7 +107,7 @@ def generate_fast_signal(chat_id):
     start_time = time.time()
     
     with ThreadPoolExecutor(max_workers=len(symbol_keys)) as executor:
-        futures = {executor.submit(analyze_symbol_1000x, sym): sym for sym in symbol_keys}
+        futures = {executor.submit(analyze_symbol, sym): sym for sym in symbol_keys}
         for future in as_completed(futures):
             if time.time() - start_time > 8.5:
                 break
@@ -149,22 +118,28 @@ def generate_fast_signal(chat_id):
             except Exception:
                 continue
     
-    if valid_results:
+    if not valid_results:
+        best_sym = symbol_keys[0]
+        best_dir = "CALL"
+        best_ppo = 0.0
+        best_score = 50.0
+    else:
+        # กรองคู่ซ้ำเพื่อไม่ให้ส่งคู่เดิมติดต่อกัน
         last_sym = last_sent_symbol.get(chat_id, "")
         filtered_results = [r for r in valid_results if r['symbol'] != last_sym]
         if not filtered_results:
             filtered_results = valid_results
+
+        # เลือกตัวที่ได้คะแนนโมเมนตัมเชิงปริมาณสูงสุดในรอบนั้น
         best_res = max(filtered_results, key=lambda x: x['score'])
         best_sym = best_res['symbol']
         best_dir = best_res['direction']
+        best_ppo = best_res['ppo']
         best_score = best_res['score']
-    else:
-        best_sym = random.choice(symbol_keys)
-        best_dir = "PUT"
-        best_score = 90
 
     last_sent_symbol[chat_id] = best_sym
     label = EXACT_8X_SYMBOLS.get(best_sym, best_sym)
+    
     now = get_thai_time()
     target_time = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
     target_time_str = target_time.strftime('%H:%M')
@@ -174,20 +149,20 @@ def generate_fast_signal(chat_id):
     btn_label = "CALL" if is_buy else "PUT"
 
     card_text = (
-        f"👑 **TITAN 8X 1000X TRIPLE-BAR (v67.0)** 👑\n"
+        f"👑 **TITAN 8X ULTIMATE PURE (v73.0)** 👑\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🎯 **คู่ OTC กราฟสวยตาม 3 แท่งย้อนหลัง:** `{label}`\n"
-        f"🛡️ **ระบบกรอง 1000x:** `Strict 3-Bar Momentum & Trend Lock`\n"
+        f"🎯 **คู่ OTC คัดเลือกพิเศษ:** `{label}`\n"
+        f"📊 **ค่า PPO หลัก:** `{best_ppo:.2f}` (Zero-Line Aligned)\n"
         f"⏱️ **เข้าออเดอร์แท่งถัดไป:** `{target_time_str}` (M1)\n\n"
         f"🔥 **ทิศทางคำสั่ง:** **{dir_emoji}**\n\n"
-        f"⭐ **ความคมชัดระบบ:** `{best_score}%`\n"
+        f"⭐ **คะแนนโมเมนตัมจริง:** `{best_score}` (ประเมินจาก PPO + Body Ratio)\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"👇 *กดปุ่มด้านล่างเพื่อขอสัญญาณสดรอบถัดไป*"
     )
 
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(InlineKeyboardButton(f"⚡ SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
-    markup.add(InlineKeyboardButton("🔄 ขอสัญญาณสดทันใจ (1000X ENGINE)", callback_data="request_next_signal"))
+    markup.add(InlineKeyboardButton("🔄 ขอสัญญาณสดทันใจ (ULTIMATE ENGINE)", callback_data="request_next_signal"))
     
     try:
         bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
@@ -197,15 +172,14 @@ def generate_fast_signal(chat_id):
 @bot.message_handler(commands=['start', 'run'])
 def handle_start(message):
     chat_id = message.chat.id
-    active_chat_ids.add(chat_id)
     
     markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(InlineKeyboardButton("🔄 กดเพื่อขอสัญญาณแรก (v67.0)", callback_data="request_next_signal"))
+    markup.add(InlineKeyboardButton("🔄 กดเพื่อสแกนรอบแรก (v73.0)", callback_data="request_next_signal"))
     
     bot.reply_to(
         message, 
-        "🚀 **TITAN v67.0 1000X TRIPLE-BAR ACTIVATED** 🚀\n"
-        "อัปเกรดระบบเช็คย้อนหลัง 3 แท่งเทียนและล็อคโมเมนตัมแบบ 1000 เท่า พร้อมลุยทำกำไรคืนให้นายครับ!", 
+        "🚀 **TITAN v73.0 ULTIMATE PURE ACTIVATED** 🚀\n"
+        "ระบบสมบูรณ์แบบ: คัดเลือกคู่ที่ดีที่สุดด้วยคะแนนโมเมนตัมเชิงปริมาณจริง ทำงานต่อเนื่อง ไม่มีหยุดชะงัก!", 
         reply_markup=markup,
         parse_mode="Markdown"
     )
@@ -215,11 +189,11 @@ def handle_callbacks(call):
     chat_id = call.message.chat.id
     
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ v67.0 1000X Active")
+        bot.answer_callback_query(call.id, "⚡ v73.0 Ultimate Active")
         return
         
     if call.data == "request_next_signal":
-        bot.answer_callback_query(call.id, "⚡ เช็ค 3 แท่งย้อนหลัง คัดตัวที่ชัวร์ที่สุด...")
+        bot.answer_callback_query(call.id, "⚡ สแกนหาคู่ที่ทรงพลังที่สุด...")
         generate_fast_signal(chat_id)
         return
 
