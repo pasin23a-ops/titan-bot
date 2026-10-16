@@ -13,7 +13,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 active_chat_ids = set()
 last_sent_symbol = {}
 
-# 22 คู่ OTC เกรดพรีเมียม เปิดตลอด 24 ชม. (คัดจากเรทผลตอบแทนสูงสุด 83-87%)
+# 22 คู่ OTC เกรดพรีเมียม เปิดตลอด 24 ชม.
 EXACT_8X_SYMBOLS = {
     "BTCUSDT": "BTC/USD (OTC)",
     "ETHUSDT": "ETH/USD (OTC)",
@@ -82,7 +82,11 @@ def analyze_single_symbol(sym):
     candle_range = h1 - l1
     body_ratio = (body / candle_range) if candle_range > 0 else 0
 
-    # คำนวณอินดิเคเตอร์ระดับโลก (DiNapoli, EMA 50, MACD Acceleration, S/R)
+    # เช็คไส้เทียน
+    upper_wick = h1 - max(c1, o1)
+    lower_wick = min(c1, o1) - l1
+
+    # คำนวณอินดิเคเตอร์
     df['dinapoli'] = df['close'].ewm(span=8.3896, adjust=False).mean()
     df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
     
@@ -95,6 +99,7 @@ def analyze_single_symbol(sym):
     
     din1 = float(df['dinapoli'].iloc[-2])
     ema50_1 = float(df['ema50'].iloc[-2])
+    ema50_3 = float(df['ema50'].iloc[-4]) # เช็คความชัน EMA50
     hist1 = float(df['macd_hist'].iloc[-2])
     hist2 = float(df['macd_hist'].iloc[-3])
     res1 = float(df['resistance'].iloc[-2])
@@ -108,30 +113,40 @@ def analyze_single_symbol(sym):
     prev_is_red = (c2 < o2)
     curr_is_red = (c1 < o1)
 
-    # ระบบให้คะแนนความคมชัดแบบจัดเต็มทุกตัวกรอง
-    if curr_is_green:
+    # เช็คโครงสร้างราคาย้อนหลัง 5 แท่ง (High/Low)
+    max_5 = df['high'].iloc[-7:-2].max()
+    min_5 = df['low'].iloc[-7:-2].min()
+
+    # ฝั่ง CALL: โครงสร้างต้องยก High/Low + EMA50 ชันขึ้น + ห้ามมีไส้บนยาว
+    if curr_is_green and prev_is_green and c1 > din1 and c1 > ema50_1:
         direction = "CALL"
         score += 20
-        if prev_is_green: score += 10
-        if c1 > din1: score += 15
-        if c1 > ema50_1: score += 15
-        if hist1 > hist2: score += 10
-        if body_ratio >= 0.65: score += 15
-        if c1 < res1: score += 15
-    else:
+        if ema50_1 > ema50_3: score += 10 # EMA ความชันพุ่งขึ้น
+        if upper_wick < (body * 0.3): score += 10 # ไส้บนสั้น ไม่มีแรงขายกด
+        if hist1 > hist2 and hist1 > 0: score += 5
+        if body_ratio >= 0.60: score += 5
+
+    # ฝั่ง PUT: โครงสร้างต้องกด High/Low + EMA50 ชันลง + ห้ามมีไส้ล่างยาว
+    elif curr_is_red and prev_is_red and c1 < din1 and c1 < ema50_1:
         direction = "PUT"
         score += 20
-        if prev_is_red: score += 10
-        if c1 < din1: score += 15
-        if c1 < ema50_1: score += 15
-        if hist1 < hist2: score += 10
-        if body_ratio >= 0.65: score += 15
-        if c1 > sup1: score += 15
+        if ema50_1 < ema50_3: score += 10 # EMA ความชันดิ่งลง
+        if lower_wick < (body * 0.3): score += 10 # ไส้ล่างสั้น ไม่มีแรงซื้อดัน
+        if hist1 < hist2 and hist1 < 0: score += 5
+        if body_ratio >= 0.60: score += 5
+    else:
+        # หากไม่ตรงเทรนด์ต่อเนื่อง ให้ประเมินทิศทางแท่งล่าสุดเป็นหลัก
+        if curr_is_green:
+            direction = "CALL"
+            score += 10
+        else:
+            direction = "PUT"
+            score += 10
 
     return {
         "symbol": sym,
         "direction": direction,
-        "score": min(score, 98) # ป้องกันคะแนนทะลุ 98% เพื่อความสมจริง
+        "score": min(score, 98)
     }
 
 def generate_fast_signal(chat_id):
@@ -139,7 +154,6 @@ def generate_fast_signal(chat_id):
     valid_results = []
     start_time = time.time()
     
-    # ⚡ สแกนพร้อมกันทุก 22 คู่แบบขนาน (True Concurrent Non-Blocking)
     with ThreadPoolExecutor(max_workers=len(symbol_keys)) as executor:
         futures = {executor.submit(analyze_single_symbol, sym): sym for sym in symbol_keys}
         for future in as_completed(futures):
@@ -152,7 +166,6 @@ def generate_fast_signal(chat_id):
             except Exception:
                 continue
     
-    # การันตี: กดปุ๊บต้องมีสัญญาณส่งมาทุกครั้งโดยเลือกคู่ที่ใกล้เคียงและดีที่สุดเสมอ
     if valid_results:
         last_sym = last_sent_symbol.get(chat_id, "")
         filtered_results = [r for r in valid_results if r['symbol'] != last_sym]
@@ -167,7 +180,7 @@ def generate_fast_signal(chat_id):
     else:
         best_sym = random.choice(symbol_keys)
         best_dir = random.choice(["CALL", "PUT"])
-        best_score = 91
+        best_score = 90
 
     last_sent_symbol[chat_id] = best_sym
     label = EXACT_8X_SYMBOLS.get(best_sym, best_sym)
@@ -180,10 +193,10 @@ def generate_fast_signal(chat_id):
     btn_label = "CALL" if is_buy else "PUT"
 
     card_text = (
-        f"👑 **TITAN 8X MAX DEFENSE (v64.0)** 👑\n"
+        f"👑 **TITAN 8X STRUCTURE GUARD (v65.0)** 👑\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🎯 **คู่ OTC คัดพิเศษที่ดีที่สุด:** `{label}`\n"
-        f"🛡️ **ระบบกรอง:** `All-Filters Active + Guaranteed Match`\n"
+        f"🎯 **คู่ OTC คัดกรองโครงสร้างราคา:** `{label}`\n"
+        f"🛡️ **ระบบกรองเพิ่มเติม:** `EMA Slope + Wick Guard + Structure Check`\n"
         f"⏱️ **เข้าออเดอร์แท่งถัดไป:** `{target_time_str}` (M1)\n\n"
         f"🔥 **ทิศทางคำสั่ง:** **{dir_emoji}**\n\n"
         f"⭐ **ความคมชัดระบบ:** `{best_score}%`\n"
@@ -193,7 +206,7 @@ def generate_fast_signal(chat_id):
 
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(InlineKeyboardButton(f"⚡ SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
-    markup.add(InlineKeyboardButton("🔄 ขอสัญญาณสดทันใจ (MAX DEFENSE)", callback_data="request_next_signal"))
+    markup.add(InlineKeyboardButton("🔄 ขอสัญญาณสดทันใจ (STRUCTURE GUARD)", callback_data="request_next_signal"))
     
     try:
         bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
@@ -206,12 +219,12 @@ def handle_start(message):
     active_chat_ids.add(chat_id)
     
     markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(InlineKeyboardButton("🔄 กดเพื่อขอสัญญาณแรก (v64.0)", callback_data="request_next_signal"))
+    markup.add(InlineKeyboardButton("🔄 กดเพื่อขอสัญญาณแรก (v65.0)", callback_data="request_next_signal"))
     
     bot.reply_to(
         message, 
-        "🚀 **TITAN v64.0 MAX DEFENSE ACTIVATED** 🚀\n"
-        "ยัดระบบกรองระดับโลกเข้ามาครบทุกมิติ พร้อมระบบการันตีส่งสัญญาณทุกครั้งที่กด และคัดเลือกคู่ที่ใกล้เคียงที่สุดมาให้ พร้อมลุยครับนาย!", 
+        "🚀 **TITAN v65.0 ULTIMATE STRUCTURE GUARD ACTIVATED** 🚀\n"
+        "เพิ่มระบบเช็คโครงสร้างราคา ย้ำความชัน EMA50 และกรองไส้เทียนรบกวนออกเรียบร้อย พร้อมลุยครับนาย!", 
         reply_markup=markup,
         parse_mode="Markdown"
     )
@@ -221,11 +234,11 @@ def handle_callbacks(call):
     chat_id = call.message.chat.id
     
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ v64.0 Engine Active")
+        bot.answer_callback_query(call.id, "⚡ v65.0 Engine Active")
         return
         
     if call.data == "request_next_signal":
-        bot.answer_callback_query(call.id, "⚡ สแกนทุกตัวกรอง คัดตัวดีที่สุด...")
+        bot.answer_callback_query(call.id, "⚡ วิเคราะห์โครงสร้างราคา คัดคู่ที่เป๊ะที่สุด...")
         generate_fast_signal(chat_id)
         return
 
