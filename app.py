@@ -13,9 +13,8 @@ bot = telebot.TeleBot(BOT_TOKEN)
 active_chat_ids = set()
 last_sent_symbol = {}
 
-# 22 คู่ OTC เกรดพรีเมียม เปิดตลอด 24 ชม. (คัดจากเรทผลตอบแทนสูงสุด 83-87%)
+# 22 คู่ OTC เกรดพรีเมียม เปิดตลอด 24 ชม.
 EXACT_8X_SYMBOLS = {
-    # --- 1. คริปโตยอดฮิต (OTC) ---
     "BTCUSDT": "BTC/USD (OTC)",
     "ETHUSDT": "ETH/USD (OTC)",
     "SOLUSDT": "SOL/USD (OTC)",
@@ -23,13 +22,9 @@ EXACT_8X_SYMBOLS = {
     "LTCUSDT": "Litecoin (OTC)",
     "SHIBUSDT": "SHIB/USD (OTC)",
     "SUIUSDT": "Sui (OTC)",
-
-    # --- 2. ทองคำ & สินค้าโภคภัณฑ์ (OTC) ---
     "XAUUSDT": "XAUUSD (OTC)",
     "XAGUSDT": "XAGUSD (OTC)",
     "GASUSDT": "แก๊สธรรมชาติ (OTC)",
-
-    # --- 3. คู่เงิน Forex (OTC 24 ชม.) ---
     "GBPJPY_OTC": "GBP/JPY (OTC)",
     "AUDJPY_OTC": "AUD/JPY (OTC)",
     "AUDUSD_OTC": "AUD/USD (OTC)",
@@ -38,8 +33,6 @@ EXACT_8X_SYMBOLS = {
     "EURGBP_OTC": "EUR/GBP (OTC)",
     "GBPCAD_OTC": "GBP/CAD (OTC)",
     "USDCHF_OTC": "USD/CHF (OTC)",
-
-    # --- 4. หุ้นบริษัทดังระดับโลก (OTC) ---
     "NKEUSDT": "Nike, Inc. (OTC)",
     "SNAPUSDT": "Snap Inc. (OTC)",
     "MCDUSDT": "McDonald's Corp... (OTC)",
@@ -73,7 +66,7 @@ def analyze_single_symbol(sym):
     if df is None or len(df) < 50:
         return None
 
-    # กรองกราฟนิ่ง / สเปรดกระชาก
+    # เกราะที่ 1: กรองกราฟนิ่ง / สเปรดกระชาก
     recent_range = df['high'].iloc[-5:] - df['low'].iloc[-5:]
     if (recent_range == 0).all():
         return None
@@ -83,14 +76,23 @@ def analyze_single_symbol(sym):
     h1 = float(df['high'].iloc[-2])
     l1 = float(df['low'].iloc[-2])
 
-    # กรองเนื้อเทียนต้องมีความชัดเจน > 58% (ตัดแท่งลังเล/โดจิออกเด็ดขาด)
+    c2 = float(df['close'].iloc[-3])
+    o2 = float(df['open'].iloc[-3])
+
+    # เกราะที่ 2: บังคับความหนาเนื้อเทียนต้อง ≥ 70% (Wick Guard ป้องกันไส้เทียนยาวหลอกตา)
     body = abs(c1 - o1)
     candle_range = h1 - l1
     body_ratio = (body / candle_range) if candle_range > 0 else 0
-    if body_ratio < 0.58:
+    if body_ratio < 0.70:
         return None
 
-    # คำนวณอินดิเคเตอร์เชิงลึก (DiNapoli, EMA 50, MACD, S/R)
+    # เกราะที่ 3: บังคับต่อเนื่อง 2 แท่งล่าสุดต้องไปในทิศทางเดียวกัน (ห้ามสลับฟันปลา)
+    prev_is_green = (c2 > o2)
+    curr_is_green = (c1 > o1)
+    prev_is_red = (c2 < o2)
+    curr_is_red = (c1 < o1)
+
+    # คำนวณอินดิเคเตอร์เชิงลึก
     df['dinapoli'] = df['close'].ewm(span=8.3896, adjust=False).mean()
     df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
     
@@ -111,26 +113,24 @@ def analyze_single_symbol(sym):
     score = 0
     direction = "NONE"
 
-    is_green = (c1 > o1)
-    is_red = (c1 < o1)
-
-    # ระบบกรองเกรด A: ล็อคตามเทรนด์แท่งก่อนหน้า ห้ามสวนเด็ดขาด
-    if is_green and c1 > din1 and c1 > ema50_1 and c1 < (res1 * 0.9996):
-        score += 45
-        if hist1 > hist2 and hist1 > 0: score += 30
-        if body_ratio > 0.65: score += 15
-        if (c1 - din1) > (din1 * 0.0002): score += 10
+    # เกราะที่ 4: เงื่อนไข CALL ขั้นสูงสุด (ต้องเขียวติดต่อกัน + เหนือเส้นหลักทุกเส้น + MACD พุ่งแรง)
+    if curr_is_green and prev_is_green and c1 > din1 and c1 > ema50_1 and c1 < (res1 * 0.9995):
+        score += 40
+        if hist1 > hist2 and hist1 > 0: score += 35
+        if body_ratio > 0.80: score += 15
+        if (c1 - din1) > (din1 * 0.0003): score += 10
         direction = "CALL"
 
-    elif is_red and c1 < din1 and c1 < ema50_1 and c1 > (sup1 * 1.0004):
-        score += 45
-        if hist1 < hist2 and hist1 < 0: score += 30
-        if body_ratio > 0.65: score += 15
-        if (din1 - c1) > (din1 * 0.0002): score += 10
+    # เกราะที่ 5: เงื่อนไข PUT ขั้นสูงสุด (ต้องแดงติดต่อกัน + ใต้เส้นหลักทุกเส้น + MACD ดิ่งแรง)
+    elif curr_is_red and prev_is_red and c1 < din1 and c1 < ema50_1 and c1 > (sup1 * 1.0005):
+        score += 40
+        if hist1 < hist2 and hist1 < 0: score += 35
+        if body_ratio > 0.80: score += 15
+        if (din1 - c1) > (din1 * 0.0003): score += 10
         direction = "PUT"
 
-    # กรองเฉพาะคะแนนความมั่นใจระดับ Elite สูงสุด (≥85%)
-    if direction != "NONE" and score >= 85:
+    # เกราะที่ 6: ตั้งกำแพงคะแนนความมั่นใจต้อง ≥ 90% เท่านั้นถึงจะปล่อยผ่าน
+    if direction != "NONE" and score >= 90:
         return {
             "symbol": sym,
             "direction": direction,
@@ -143,11 +143,8 @@ def generate_fast_signal(chat_id):
     valid_results = []
     start_time = time.time()
     
-    # ⚡ ระบบประมวลผลพร้อมกันทุกคู่แบบ True Concurrent (Non-Sequential) ด้วย ThreadPool เต็มพิกัด
     with ThreadPoolExecutor(max_workers=len(symbol_keys)) as executor:
-        # ยิงคำนวณทุกคู่พร้อมกันในมิลลิวินาทีเดียว
         futures = {executor.submit(analyze_single_symbol, sym): sym for sym in symbol_keys}
-        
         for future in as_completed(futures):
             if time.time() - start_time > 8.5:
                 break
@@ -165,15 +162,25 @@ def generate_fast_signal(chat_id):
         if not filtered_results:
             filtered_results = valid_results
             
-        # คัดเลือก "คู่ที่มั่นใจที่สุดและคะแนนสูงสุด" ออกมาตัวเดียวเน้นๆ
         best_res = max(filtered_results, key=lambda x: x['score'])
         best_sym = best_res['symbol']
         best_dir = best_res['direction']
         best_score = best_res['score']
     else:
-        best_sym = random.choice(["BTCUSDT", "ETHUSDT", "XAUUSDT"])
-        best_dir = random.choice(["CALL", "PUT"])
-        best_score = 96
+        # เกราะที่ 7: ถ้ารอบไหนไม่มีคู่ไหนผ่านมาตรฐาน 90% บอทจะปฏิเสธการส่งสัญญาณเพื่อปกป้องเงินทุนทันที
+        try:
+            bot.send_message(
+                chat_id, 
+                "🛡️ **TITAN 8X FORTRESS (v62.0)** 🛡️\n"
+                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                "⚠️ *ตรวจพบตลาดมีความผันผวนสูง หรือไม่มีคู่ไหนผ่านเกณฑ์ความปลอดภัยขั้นสูงสุด (Score < 90%)*\n\n"
+                "🛑 **ระบบสั่งระงับการส่งสัญญาณรอบนี้เพื่อความปลอดภัยของทุนครับนาย!**\n"
+                "━━━━━━━━━━━━━━━━━━━━━━", 
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+        return
 
     last_sent_symbol[chat_id] = best_sym
     label = EXACT_8X_SYMBOLS.get(best_sym, best_sym)
@@ -186,11 +193,10 @@ def generate_fast_signal(chat_id):
     btn_label = "CALL" if is_buy else "PUT"
 
     card_text = (
-        f"👑 **TITAN 8X ULTRA-CONCURRENT (v61.0)** 👑\n"
+        f"👑 **TITAN 8X ULTIMATE FORTRESS (v62.0)** 👑\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🎯 **คู่ OTC ที่มั่นใจที่สุด (Best Pick):** `{label}`\n"
-        f"⚡ **ระบบสแกน:** `True Parallel Execution (22 คู่พร้อมกัน)`\n"
-        f"🛡️ **เกณฑ์คัดกรองความปลอดภัย:** `Elite Guard (Score ≥85%)`\n"
+        f"🎯 **คู่เกรด S ที่ผ่านป้อมปราการ:** `{label}`\n"
+        f"🛡️ **ระบบกรอง 7 ชั้น:** `Maximum Defense (Score ≥90%)`\n"
         f"⏱️ **เข้าออเดอร์แท่งถัดไป:** `{target_time_str}` (M1)\n\n"
         f"🔥 **ทิศทางคำสั่ง:** **{dir_emoji}**\n\n"
         f"⭐ **ความคมชัดระบบ:** `{best_score}%`\n"
@@ -200,7 +206,7 @@ def generate_fast_signal(chat_id):
 
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(InlineKeyboardButton(f"⚡ SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
-    markup.add(InlineKeyboardButton("🔄 ขอสัญญาณสดทันใจ (ULTRA SNIPER)", callback_data="request_next_signal"))
+    markup.add(InlineKeyboardButton("🔄 ขอสัญญาณสดทันใจ (FORTRESS)", callback_data="request_next_signal"))
     
     try:
         bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
@@ -213,12 +219,12 @@ def handle_start(message):
     active_chat_ids.add(chat_id)
     
     markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(InlineKeyboardButton("🔄 กดเพื่อขอสัญญาณแรก (v61.0)", callback_data="request_next_signal"))
+    markup.add(InlineKeyboardButton("🔄 กดเพื่อขอสัญญาณแรก (v62.0)", callback_data="request_next_signal"))
     
     bot.reply_to(
         message, 
-        "🚀 **TITAN v61.0 ULTRA-CONCURRENT ACTIVATED** 🚀\n"
-        "อัปเกรดระบบประมวลผลพร้อมกันทุกคู่แบบขนานแท้ 100% (Non-Sequential) คัดเลือกคู่ที่ดีและมั่นใจที่สุดมาให้แบบไร้ที่ติ พร้อมลุยทำกำไรครับนาย!", 
+        "🚀 **TITAN v62.0 ULTIMATE FORTRESS ACTIVATED** 🚀\n"
+        "เปิดระบบป้อมปราการป้องกันความเสี่ยง 7 ชั้น บังคับเนื้อเทียน 70%+, ต่อเนื่อง 2 แท่ง, คะแนน 90%+ และมีระบบตัดใจไม่ส่งสัญญาณหากตลาดไม่ปลอดภัย พร้อมลุยครับนาย!", 
         reply_markup=markup,
         parse_mode="Markdown"
     )
@@ -228,11 +234,11 @@ def handle_callbacks(call):
     chat_id = call.message.chat.id
     
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ v61.0 Engine Active")
+        bot.answer_callback_query(call.id, "⚡ v62.0 Fortress Active")
         return
         
     if call.data == "request_next_signal":
-        bot.answer_callback_query(call.id, "⚡ สแกนพร้อมกัน 22 คู่ คัดตัวท็อปสุด...")
+        bot.answer_callback_query(call.id, "🛡️ ตรวจสอบป้อมปราการ 7 ชั้น...")
         generate_fast_signal(chat_id)
         return
 
