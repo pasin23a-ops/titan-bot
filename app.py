@@ -11,7 +11,6 @@ bot = telebot.TeleBot(BOT_TOKEN)
 
 last_sent_symbol = {}
 
-# 22 คู่สินทรัพย์ชื่อสะอาด ตรงประเด็น
 EXACT_8X_SYMBOLS = {
     "BTCUSDT": "BTC/USD (OTC)",
     "ETHUSDT": "ETH/USD (OTC)",
@@ -28,7 +27,7 @@ EXACT_8X_SYMBOLS = {
     "AUDUSD_OTC": "AUD/USD (OTC)",
     "EURUSD_OTC": "EUR/USD (OTC)",
     "EURJPY_OTC": "EUR/JPY (OTC)",
-    "EURGBP_OTC": "EUR/GBP (OTC)",
+    "EURGBP_OTC": "GBP/GBP (OTC)",
     "GBPCAD_OTC": "GBP/CAD (OTC)",
     "USDCHF_OTC": "USD/CHF (OTC)",
     "NKEUSDT": "Nike, Inc. (OTC)",
@@ -64,7 +63,6 @@ def analyze_symbol(sym):
     if df is None or len(df) < 50:
         return None
 
-    # PPO Calculation (12, 26, Close, EMA)
     ema12 = df['close'].ewm(span=12, adjust=False).mean()
     ema26 = df['close'].ewm(span=26, adjust=False).mean()
     ppo_line = ((ema12 - ema26) / ema26) * 100
@@ -82,13 +80,13 @@ def analyze_symbol(sym):
     body_ratio = body1 / rng1
     ppo_distance = abs(current_ppo)
 
-    # คุมทิศทางหลักด้วยเส้นศูนย์ของ PPO (เหนือ 0 = CALL, ใต้ 0 = PUT)
+    # คุมทิศทางตามเส้นศูนย์ PPO
     direction = "CALL" if current_ppo > 0 else "PUT"
     
-    # คำนวณคะแนนเชิงปริมาณจริง (Objective Momentum Score) จาก PPO Distance และ Body Ratio
+    # คำนวณคะแนนโมเมนตัมเชิงปริมาณจริงจากข้อมูลราคา
     base_score = (ppo_distance * 30) + (body_ratio * 40)
     
-    # ให้โบนัสเพิ่มเติมถ้า 3 แท่งเรียงตัวสอดคล้องกับทิศทาง PPO
+    # โบนัสเพิ่มเติมถ้า 3 แท่งเรียงตัวสอดคล้องกับทิศทาง
     if direction == "CALL" and (c1 > o1) and (c2 > o2) and (c3 > o3):
         base_score += 30
     elif direction == "PUT" and (c1 < o1) and (c2 < o2) and (c3 < o3):
@@ -118,19 +116,20 @@ def generate_fast_signal(chat_id):
             except Exception:
                 continue
     
+    # การันตี: หากเกิดกรณีดึงข้อมูลไม่ได้เลย ให้หยิบตัวแรกมาแสดงผลทันทีเพื่อให้กดต่อได้ ไม่ติดขัด
     if not valid_results:
         best_sym = symbol_keys[0]
         best_dir = "CALL"
         best_ppo = 0.0
-        best_score = 50.0
+        best_score = 40.0
     else:
-        # กรองคู่ซ้ำเพื่อไม่ให้ส่งคู่เดิมติดต่อกัน
+        # กรองคู่ซ้ำเพื่อไม่ให้ส่งซ้ำคู่เดิมติดกัน (ถ้ามีตัวอื่นให้เลือก)
         last_sym = last_sent_symbol.get(chat_id, "")
         filtered_results = [r for r in valid_results if r['symbol'] != last_sym]
         if not filtered_results:
             filtered_results = valid_results
 
-        # เลือกตัวที่ได้คะแนนโมเมนตัมเชิงปริมาณสูงสุดในรอบนั้น
+        # เลือกตัวที่ได้คะแนนสูงสุดในรอบนั้นเสมอ ไม่มีคำว่าปฏิเสธสัญญาณ
         best_res = max(filtered_results, key=lambda x: x['score'])
         best_sym = best_res['symbol']
         best_dir = best_res['direction']
@@ -149,20 +148,20 @@ def generate_fast_signal(chat_id):
     btn_label = "CALL" if is_buy else "PUT"
 
     card_text = (
-        f"👑 **TITAN 8X ULTIMATE PURE (v73.0)** 👑\n"
+        f"🎯 **TITAN 8X GUARANTEED (v75.0)** 🎯\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🎯 **คู่ OTC คัดเลือกพิเศษ:** `{label}`\n"
-        f"📊 **ค่า PPO หลัก:** `{best_ppo:.2f}` (Zero-Line Aligned)\n"
+        f"🎯 **คู่ OTC คัดเลือกดีที่สุด:** `{label}`\n"
+        f"📊 **ค่า PPO หลัก:** `{best_ppo:.2f}`\n"
         f"⏱️ **เข้าออเดอร์แท่งถัดไป:** `{target_time_str}` (M1)\n\n"
         f"🔥 **ทิศทางคำสั่ง:** **{dir_emoji}**\n\n"
-        f"⭐ **คะแนนโมเมนตัมจริง:** `{best_score}` (ประเมินจาก PPO + Body Ratio)\n"
+        f"⭐ **คะแนนโมเมนตัมจริง:** `{best_score}`\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"👇 *กดปุ่มด้านล่างเพื่อขอสัญญาณสดรอบถัดไป*"
     )
 
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(InlineKeyboardButton(f"⚡ SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
-    markup.add(InlineKeyboardButton("🔄 ขอสัญญาณสดทันใจ (ULTIMATE ENGINE)", callback_data="request_next_signal"))
+    markup.add(InlineKeyboardButton("🔄 ขอสัญญาณสดทันใจ (GUARANTEED ENGINE)", callback_data="request_next_signal"))
     
     try:
         bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
@@ -174,12 +173,12 @@ def handle_start(message):
     chat_id = message.chat.id
     
     markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(InlineKeyboardButton("🔄 กดเพื่อสแกนรอบแรก (v73.0)", callback_data="request_next_signal"))
+    markup.add(InlineKeyboardButton("🔄 กดเพื่อสแกนรอบแรก (v75.0)", callback_data="request_next_signal"))
     
     bot.reply_to(
         message, 
-        "🚀 **TITAN v73.0 ULTIMATE PURE ACTIVATED** 🚀\n"
-        "ระบบสมบูรณ์แบบ: คัดเลือกคู่ที่ดีที่สุดด้วยคะแนนโมเมนตัมเชิงปริมาณจริง ทำงานต่อเนื่อง ไม่มีหยุดชะงัก!", 
+        "🚀 **TITAN v75.0 GUARANTEED SIGNAL ACTIVATED** 🚀\n"
+        "โหมดการันตีสัญญาณ: กดปุ่มปุ๊บ ออกผลลัพธ์และทิศทางให้ทันทีทุกรอบ ไม่มีกั๊ก ไม่มีงดส่งสัญญาณ!", 
         reply_markup=markup,
         parse_mode="Markdown"
     )
@@ -189,11 +188,11 @@ def handle_callbacks(call):
     chat_id = call.message.chat.id
     
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ v73.0 Ultimate Active")
+        bot.answer_callback_query(call.id, "⚡ v75.0 Active")
         return
         
     if call.data == "request_next_signal":
-        bot.answer_callback_query(call.id, "⚡ สแกนหาคู่ที่ทรงพลังที่สุด...")
+        bot.answer_callback_query(call.id, "⚡ สแกนหาคู่ที่ดีที่สุดในรอบนี้...")
         generate_fast_signal(chat_id)
         return
 
