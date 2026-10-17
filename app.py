@@ -6,13 +6,13 @@ import time
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# 🔒 ป้องกันการเปิดเผย Token โดยใช้ Placeholder (โปรดใส่ Token ของท่านเอง)
-BOT_TOKEN = "YOUR_BOT_TOKEN"
+# 🚀 ใส่ Token จริงพร้อมใช้งานเรียบร้อย
+BOT_TOKEN = "8316396699:AAHff4bp0RbvYJjx-eOhuUqr4kgD-MERj-c"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 last_sent_symbol = {}
 
-# 🌐 ปรับปรุงรายชื่อสินทรัพย์ให้ตรงกับข้อมูลที่ Binance API รองรับจริง ตัดคู่ Forex ที่ Binance ไม่มีออก
+# 🌐 รายชื่อสินทรัพย์ที่ Binance API รองรับจริง
 EXACT_8X_SYMBOLS = {
     "BTCUSDT": "BTC/USD (Proxy/Binance)",
     "ETHUSDT": "ETH/USD (Proxy/Binance)",
@@ -24,7 +24,7 @@ EXACT_8X_SYMBOLS = {
     "XAUUSDT": "XAUUSD (Proxy/Binance)",
     "XAGUSDT": "XAGUSD (Proxy/Binance)",
     "GASUSDT": "แก๊สธรรมชาติ (Proxy/Binance)",
-    "EURUSD_OTC": "EUR/USD (Proxy/Binance)", # ปรับป้ายกำกับให้สอดคล้องกัน
+    "EURUSD_OTC": "EUR/USD (Proxy/Binance)",
     "NKEUSDT": "Nike, Inc. (Proxy/Binance)",
     "SNAPUSDT": "Snap Inc. (Proxy/Binance)",
     "MCDUSDT": "McDonald's Corp... (Proxy/Binance)",
@@ -35,7 +35,6 @@ def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
 def fetch_kline(symbol, interval="1m", limit=60):
-    # ตรวจสอบ symbol ให้ถูกต้องตามโครงสร้าง Binance API
     binance_symbol = symbol.replace("_OTC", "") 
     endpoints = [
         f"https://api.binance.com/api/v3/klines?symbol={binance_symbol}&interval={interval}&limit={limit}",
@@ -213,7 +212,7 @@ def handle_start(message):
     bot.reply_to(
         message, 
         "🚀 **TITAN v80.0 PRODUCTION ARCHITECTURE ACTIVATED** 🚀\n"
-        "สถาปัตยกรรมสมบูรณ์แบบ: แยกสถิติความสำเร็จการดึงข้อมูล (Success/Total), ทำความสะอาด Data Mapping และยกระดับความปลอดภัยเรียบร้อย!", 
+        "สถาปัตยกรรมสมบูรณ์แบบ: แยกสถิติความสำเร็จการดึงข้อมูล (Success/Total) และพร้อมลุยแล้ว!", 
         reply_markup=markup,
         parse_mode="Markdown"
     )
