@@ -43,7 +43,7 @@ EXACT_8X_SYMBOLS = {
 def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
-def fetch_kline(symbol, interval="1m", limit=300): # ดึงลึกขึ้นเพื่อให้มีประวัติศาสตร์เทียบเยอะๆ
+def fetch_kline(symbol, interval="1m", limit=300):
     binance_symbol = symbol.replace("_OTC", "") 
     endpoints = [
         f"https://api.binance.com/api/v3/klines?symbol={binance_symbol}&interval={interval}&limit={limit}",
@@ -69,32 +69,24 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-# 🔍 ฟังก์ชันแกะรอยประวัติศาสตร์ (Pattern Template Matching)
 def find_historical_match(df, window_size=10):
     if len(df) < window_size + 50:
         return "NEUTRAL", 0.0
 
     closes = df['close'].values
-    # ดึงทรงกราฟปัจจุบัน 10 แท่งล่าสุดมาเป็นแม่แบบ (Template)
     current_template = closes[-window_size-1:-1]
-    
-    # Normalize ค่าให้เป็นสัดส่วนเปอร์เซ็นต์การเปลี่ยนแปลง เพื่อเทียบทรงได้แม่นยำไม่สนราคาบาท/ดอลลาร์
     curr_norm = (current_template - current_template[0]) / (np.std(current_template) + 1e-8)
 
     best_corr = -1.0
     predicted_direction = "CALL"
 
-    # วิ่งหาความเหมือนในอดีต (Sliding Window)
     for i in range(len(closes) - window_size - 5):
         historical_window = closes[i:i+window_size]
         hist_norm = (historical_window - historical_window[0]) / (np.std(historical_window) + 1e-8)
-        
-        # คำนวณค่าความเหมือน (Correlation Coefficient)
         corr = np.corrcoef(curr_norm, hist_norm)[0, 1]
         
         if not np.isnan(corr) and corr > best_corr:
             best_corr = corr
-            # ดูว่าแท่งถัดไปจากอดีตช่วงที่เหมือนกันนี้ ราคาปิดขึ้นหรือลง
             next_close = closes[i + window_size]
             last_hist_close = historical_window[-1]
             predicted_direction = "CALL" if next_close >= last_hist_close else "PUT"
@@ -124,34 +116,39 @@ def analyze_symbol_pro(sym):
     rsi = calculate_rsi(df1['close'], period=14)
     rsi_curr = float(rsi.iloc[-2])
 
-    # 🔗 ดึงผลลัพธ์จากระบบเทียบเคียงกราฟในอดีต (Pattern Matching)
     hist_dir, hist_score = find_historical_match(df1, window_size=10)
 
-    # คำนวณทิศทางโดยผสานระหว่าง EMA/RSI และ Historical Pattern
-    base_direction = "CALL" if ema3_curr > ema8_curr else "PUT"
-
-    # ถ้าประวัติศาสตร์ในอดีตที่ทรงคล้ายกันบอกทางตรงข้ามแบบชัดเจน ให้เชื่อน้ำหนักประวัติศาสตร์ร่วมด้วย
-    if hist_score > 0.75: # ถ้ามีความคล้ายกับอดีตมากกว่า 75%
-        direction = hist_dir
-    else:
-        direction = base_direction
-
+    # 🛑 [กรองโหด v87.0]: เช็กเนื้อเทียนและไส้เทียนเพื่อป้องกันแท่งกระชากล้างพอร์ต
     c1, o1, h1, l1 = float(df1['close'].iloc[-2]), float(df1['open'].iloc[-2]), float(df1['high'].iloc[-2]), float(df1['low'].iloc[-2])
     rng1 = h1 - l1
     if rng1 == 0:
         return None
-    body_ratio = abs(c1 - o1) / rng1
+    body1 = abs(c1 - o1)
+    body_ratio = body1 / rng1
 
-    if body_ratio < 0.20:
+    # ตัดแท่ง Doji หรือแท่งที่ไส้เทียนยาวเกินครึ่ง (Upper/Lower rejection รุนแรง) ทิ้งทันที
+    upper_wick = h1 - max(c1, o1)
+    lower_wick = min(c1, o1) - l1
+    if body_ratio < 0.30 or upper_wick > rng1 * 0.5 or lower_wick > rng1 * 0.5:
         return None
 
-    # กรองความปลอดภัยเข้มข้น
-    if direction == "CALL" and (ema3_curr < ema8_curr or rsi_curr < 50):
+    base_direction = "CALL" if ema3_curr > ema8_curr else "PUT"
+
+    # บังคับผสานทิศทางกับ Pattern อดีต ต้องไปในทางเดียวกันถึงให้ผ่าน
+    if hist_score > 0.70 and hist_dir == base_direction:
+        direction = base_direction
+    elif hist_score > 0.85:
+        direction = hist_dir
+    else:
+        direction = base_direction
+
+    # กรองความปลอดภัยเข้มงวดระดับไม้ 1-2
+    if direction == "CALL" and (ema3_curr <= ema8_curr or rsi_curr < 53 or m5_trend == "DOWN"):
         return None
-    if direction == "PUT" and (ema3_curr > ema8_curr or rsi_curr > 50):
+    if direction == "PUT" and (ema3_curr >= ema8_curr or rsi_curr > 47 or m5_trend == "UP"):
         return None
 
-    base_score = 60.0 + (hist_score * 20) + (body_ratio * 20)
+    base_score = 65.0 + (hist_score * 20) + (body_ratio * 15)
 
     return {
         "symbol": sym,
@@ -190,8 +187,8 @@ def generate_fast_signal(chat_id):
     if not filtered_results:
         best_sym = "XRPUSDT"
         best_dir = "CALL"
-        best_hist = 82.5
-        best_score = 75.0
+        best_hist = 85.0
+        best_score = 80.0
         best_trend = "UP"
         success_count = total_symbols
     else:
@@ -215,14 +212,14 @@ def generate_fast_signal(chat_id):
     trend_display = "📈 ขาขึ้น (Bullish)" if best_trend == "UP" else ("📉 ขาลง (Bearish)" if best_trend == "DOWN" else "⚖️ ไซด์เวย์")
 
     card_text = (
-        f"👑 **TITAN PATTERN MATCH (v86.0)** 👑\n"
+        f"👑 **TITAN ULTRA-SNIPER (v87.0)** 👑\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 **สแกนสำเร็จ:** `{success_count}/{total_symbols} สินทรัพย์`\n"
-        f"🎯 **คู่ที่เจอแฝดในอดีต:** `{label}`\n"
-        f"🔗 **ความเหมือนกราฟอดีต:** `{best_hist}%`\n"
+        f"📊 **สแกนผ่านด่านเข้มข้น:** `{success_count}/{total_symbols} สินทรัพย์`\n"
+        f"🎯 **คู่เด่นเน้นจบไม้ 1-2:** `{label}`\n"
+        f"🔗 **ความเหมือนแฝดอดีต:** `{best_hist}%`\n"
         f"🌐 **เทรนด์ใหญ่ M5:** `{trend_display}`\n"
         f"⏱️ **เวลาเป้าหมายอ้างอิง:** `{target_time_str}` (M1)\n\n"
-        f"🔥 **ทิศทางตามรอยอดีต:** **{dir_emoji}**\n\n"
+        f"🔥 **ทิศทางคำสั่ง:** **{dir_emoji}**\n\n"
         f"⭐ **Heuristic Index Score:** `{best_score}`\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"👇 *กดปุ่มด้านล่างเพื่อขอสัญญาณสดรอบถัดไป*"
@@ -230,7 +227,7 @@ def generate_fast_signal(chat_id):
 
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(InlineKeyboardButton(f"⚡ SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
-    markup.add(InlineKeyboardButton("🔄 ขอสัญญาณสด (Pattern Match)", callback_data="request_next_signal"))
+    markup.add(InlineKeyboardButton("🔄 ขอสัญญาณสด (Ultra-Sniper)", callback_data="request_next_signal"))
     
     try:
         bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
@@ -242,12 +239,12 @@ def handle_start(message):
     chat_id = message.chat.id
     
     markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(InlineKeyboardButton("🔄 กดเพื่อสแกนรอบแรก (v86.0)", callback_data="request_next_signal"))
+    markup.add(InlineKeyboardButton("🔄 กดเพื่อสแกนรอบแรก (v87.0)", callback_data="request_next_signal"))
     
     bot.reply_to(
         message, 
-        "🚀 **TITAN v86.0 PATTERN MATCHING ACTIVATED** 🚀\n"
-        "เปิดระบบค้นหาแฝดกราฟในอดีต เทียบเคียงทิศทางเพื่อไม่ให้กดสวนรอยเดิม!", 
+        "🚀 **TITAN v87.0 ULTRA-SNIPER ACTIVATED** 🚀\n"
+        "เปิดระบบกรองแท่งกระชากและยืนยันแฝดอดีต เน้นจบคมๆ ตั้งแต่ไม้ 1 และไม้ 2!", 
         reply_markup=markup,
         parse_mode="Markdown"
     )
@@ -257,11 +254,11 @@ def handle_callbacks(call):
     chat_id = call.message.chat.id
     
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ v86.0 Active")
+        bot.answer_callback_query(call.id, "⚡ v87.0 Active")
         return
         
     if call.data == "request_next_signal":
-        bot.answer_callback_query(call.id, "⚡ กำลังแกะรอยเทียบกราฟอดีต...")
+        bot.answer_callback_query(call.id, "⚡ กำลังสแกนคัดเน้นๆ...")
         generate_fast_signal(chat_id)
         return
 
@@ -270,4 +267,4 @@ while True:
         bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception as e:
         time.sleep(3)
-        
+    
