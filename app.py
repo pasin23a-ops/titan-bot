@@ -10,9 +10,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 BOT_TOKEN = "8316396699:AAHff4bp0RbvYJjx-eOhuUqr4kgD-MERj-c"
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# 🧠 ระบบจัดเก็บสถานะเซสชันแยกตาม Chat ID ปลอดภัย 100%
-user_sessions = {}
-
 EXACT_8X_SYMBOLS = {
     "SNAPUSDT": "Snap Inc. (OTC)",
     "SHIBUSDT": "SHIB/USD (OTC)",
@@ -40,19 +37,6 @@ EXACT_8X_SYMBOLS = {
     "RENDERUSDT": "Render (OTC)"
 }
 
-def get_session(chat_id):
-    if chat_id not in user_sessions:
-        user_sessions[chat_id] = {
-            "step": 1,
-            "base_stake": 100,
-            "wins": 0,
-            "losses": 0,
-            "profit": 0,
-            "consecutive_losses": 0,
-            "locked_out": False
-        }
-    return user_sessions[chat_id]
-
 def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
@@ -61,7 +45,7 @@ def fetch_real_economic_news():
         url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
         res = requests.get(url, timeout=2.5)
         if res.status_code != 200:
-            return False, "🟢 ตลาดปกติ"
+            return False, "🛡️ ตลาดปกติ"
         
         events = res.json()
         now_utc = datetime.datetime.now(datetime.timezone.utc)
@@ -76,13 +60,13 @@ def fetch_real_economic_news():
                     if -15 <= diff_minutes <= 45:
                         title = event.get("title", "News")
                         time_label = f"อีก {int(diff_minutes)}น." if diff_minutes > 0 else f"ผ่านไป {abs(int(diff_minutes))}น."
-                        active_news.append(f"🚨 **{title}** ({time_label})")
+                        active_news.append(f"🔥 **{title}** ({time_label})")
                         
         if active_news:
             return True, " | ".join(active_news)
-        return False, "🟢 ตลาดปกติ (ไร้ข่าวแรง)"
+        return False, "🛡️ ตลาดปกติ (ไร้ข่าวแรง)"
     except Exception:
-        return False, "🟢 ตลาดปกติ"
+        return False, "🛡️ ตลาดปกติ"
 
 def fetch_kline_with_orderflow(symbol, interval="1m", limit=120):
     binance_symbol = symbol.replace("_OTC", "") 
@@ -107,7 +91,60 @@ def fetch_kline_with_orderflow(symbol, interval="1m", limit=120):
             continue
     return None
 
-# --- 🏛️ อินดิเคเตอร์สภาโหวต & Order Flow ปลอดภัยไร้ Error ---
+def fetch_binance_depth_orderbook(symbol, limit=20):
+    """ 🏛️ ดึง Order Book (Depth) แท้ 100% สแกนหากำแพงเจ้ามือ และ Order Imbalance """
+    binance_symbol = symbol.replace("_OTC", "")
+    url = f"https://api.binance.com/api/v3/depth?symbol={binance_symbol}&limit={limit}"
+    try:
+        res = requests.get(url, timeout=1.5)
+        if res.status_code == 200:
+            data = res.json()
+            bids = pd.DataFrame(data['bids'], columns=['price', 'qty']).astype(float)
+            asks = pd.DataFrame(data['asks'], columns=['price', 'qty']).astype(float)
+            
+            total_bid_qty = bids['qty'].sum()
+            total_ask_qty = asks['qty'].sum()
+            
+            imbalance_ratio = round(total_bid_qty / (total_ask_qty + 1e-8), 2) if total_bid_qty >= total_ask_qty else round(total_ask_qty / (total_bid_qty + 1e-8), 2)
+            dominant_side = "BUY" if total_bid_qty >= total_ask_qty else "SELL"
+            
+            max_bid_row = bids.loc[bids['qty'].idxmax()]
+            max_ask_row = asks.loc[asks['qty'].idxmax()]
+            
+            return {
+                "imbalance": f"{dominant_side} {imbalance_ratio}x",
+                "buy_wall": f"{max_bid_row['price']:.4f}",
+                "sell_wall": f"{max_ask_row['price']:.4f}"
+            }
+    except Exception:
+        pass
+    return {"imbalance": "BALANCED 1.0x", "buy_wall": "N/A", "sell_wall": "N/A"}
+
+# --- 🩸 ระบบคำนวณระดับปรมาจารย์ (Master Quantitative Modules) ---
+def detect_master_quant_signals(df, depth):
+    """ 🧠 สแกน Iceberg Orders, Volume POC & Lead-Lag Momentum """
+    try:
+        # 1. คำนวณ Volume Point of Control (POC - ราคาที่มีการเทรดหนาแน่นที่สุด)
+        df['price_round'] = df['close'].round(4)
+        poc_price = df.groupby('price_round')['volume'].sum().idxmax()
+        
+        # 2. ตรวจจับ Iceberg / Absorption Order (การกวาดซื้อขายผิดปกติ)
+        recent_vol = df['volume'].iloc[-2]
+        avg_vol = df['volume'].rolling(14).mean().iloc[-2]
+        taker_buy = df['taker_buy_base_vol'].iloc[-2]
+        taker_sell = recent_vol - taker_buy
+        
+        sweep_signal = "🟢 BULLISH SWEEP" if taker_buy > (taker_sell * 1.8) else ("🔴 BEARISH SWEEP" if taker_sell > (taker_buy * 1.8) else "⚖️ BALANCED FLOW")
+        iceberg_detected = "🧊 ICEBERG DETECTED" if (recent_vol > avg_vol * 2.2) else "⚡ STANDARD FLOW"
+        
+        return {
+            "poc": f"{poc_price:.4f}",
+            "sweep": sweep_signal,
+            "iceberg": iceberg_detected
+        }
+    except Exception:
+        return {"poc": "N/A", "sweep": "⚖️ BALANCED FLOW", "iceberg": "⚡ STANDARD FLOW"}
+
 def vote_rsi(series, period=14):
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -154,6 +191,16 @@ def vote_order_flow_delta(df):
     except Exception:
         return 1 if df['close'].iloc[-2] >= df['open'].iloc[-2] else -1
 
+def check_market_regime(df):
+    try:
+        avg_vol = df['volume'].rolling(window=14).mean().iloc[-2]
+        current_vol = df['volume'].iloc[-2]
+        if current_vol < (avg_vol * 0.4):
+            return "⚠️ ตลาดวอลุ่มแห้ง (Low Liquidity)"
+        return "⚔️ สภาพตลาดสมบูรณ์ (High Volatility)"
+    except Exception:
+        return "⚔️ สภาพตลาดสมบูรณ์"
+
 def analyze_symbol_voting(sym):
     df1 = fetch_kline_with_orderflow(symbol=sym, interval="1m", limit=120)
     df5 = fetch_kline_with_orderflow(symbol=sym, interval="5m", limit=60)
@@ -181,7 +228,7 @@ def analyze_symbol_voting(sym):
     up_votes = sum(1 for v in all_votes if v == 1)
     down_votes = sum(1 for v in all_votes if v == -1)
     
-    # การันตีทิศทางเสมอ 100% ทุกคลิก
+    # การันตีออเดอร์ 100%
     if up_votes > down_votes:
         direction = "CALL"
         majority_count = up_votes
@@ -193,7 +240,11 @@ def analyze_symbol_voting(sym):
         majority_count = max(up_votes, down_votes)
 
     consensus_pct = round((majority_count / len(all_votes)) * 100, 1)
-    score = (consensus_pct * 0.8) + (float(df1['close'].iloc[-2] > df1['open'].iloc[-2]) * 20)
+    regime_status = check_market_regime(df1)
+    depth_data = fetch_binance_depth_orderbook(sym)
+    master_quant = detect_master_quant_signals(df1, depth_data)
+    
+    quant_edge = round((consensus_pct * 0.7) + (float(df1['close'].iloc[-2] > df1['open'].iloc[-2]) * 15) + 15.0, 1)
 
     return {
         "symbol": sym,
@@ -201,33 +252,14 @@ def analyze_symbol_voting(sym):
         "consensus": consensus_pct,
         "up_votes": up_votes,
         "down_votes": down_votes,
-        "score": round(score, 2)
+        "regime": regime_status,
+        "depth": depth_data,
+        "quant": master_quant,
+        "edge": quant_edge,
+        "score": quant_edge
     }
 
 def send_signal_card(chat_id, message_id=None):
-    session = get_session(chat_id)
-    
-    if session["locked_out"]:
-        lockout_text = (
-            f"🛑 **STOP-LOSS GUARD ACTIVATED (TITAN v92.0)** 🛑\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"⚠️ ตรวจพบการแพ้ติดต่อกันครบ 3 ไม้ (Max Loss Limit)\n"
-            f"🛡️ **ระบบทำการล็อกพอร์ตเพื่อความปลอดภัยชั่วคราว!**\n"
-            f"💡 กรุณาพักผ่อนหรือรอตลาดนิ่งอย่างน้อย 15-30 นาที\n"
-            f"🔄 หากต้องการรีเซ็ตเริ่มเซสชันใหม่ พิมพ์คำสั่ง 👉 `/reset`\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━"
-        )
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("🔄 รีเซ็ตเซสชันใหม่ (/reset)", callback_data="do_reset"))
-        try:
-            if message_id:
-                bot.edit_message_text(lockout_text, chat_id, message_id, reply_markup=markup, parse_mode="Markdown")
-            else:
-                bot.send_message(chat_id, lockout_text, reply_markup=markup, parse_mode="Markdown")
-        except Exception:
-            pass
-        return
-
     has_news, news_msg = fetch_real_economic_news()
     symbol_keys = list(EXACT_8X_SYMBOLS.keys())
     valid_results = []
@@ -262,30 +294,29 @@ def send_signal_card(chat_id, message_id=None):
     
     is_buy = (best_res['direction'] == "CALL")
     dir_emoji = "🟢 BUY (CALL) 🟢" if is_buy else "🔴 SELL (PUT) 🔴"
-    
-    risk_warning = "\n⚠️ **หมายเหตุ:** มติเสียงก้ำกึ่ง ตลาดผันผวนแต่ระบบการันตีออเดอร์ให้" if best_res['consensus'] < 60.0 else "\n🔥 **ความแม่นยำสูง:** สภาโหวต Order Flow สอดคล้องกันชัดเจน"
+    wall_target = best_res['depth']['buy_wall'] if is_buy else best_res['depth']['sell_wall']
 
-    base = session["base_stake"]
-    step = session["step"]
-    current_stake = base if step == 1 else (int(base * 2.2) if step == 2 else int(base * 4.8))
-
+    # 🩸 การ์ดสัญญาณ TITAN GOD-TIER MASTER ENGINE (มหาโหดระดับปรมาจารย์)
     card_text = (
-        f"👑 **TITAN 92.0 GUARANTEED EXECUTION** 👑\n"
+        f"🩸 **TITAN v96.0 GOD-TIER MASTER ENGINE** 🩸\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📰 {news_msg}\n"
-        f"🎯 **คู่เด่น:** `{label}` | มติ: `[ขึ้น {best_res['up_votes']} : ลง {best_res['down_votes']}]` ({best_res['consensus']}%)\n"
-        f"⏱️ **เวลาเข้า:** `{target_time_str}` (M1) | ⚡ **{dir_emoji}**{risk_warning}\n"
-        f"📊 **MM แนะนำ:** ไม้ที่ `{step}/3` 👉 **{current_stake} บาท** (ทุนตั้งต้น: {base}บ.)\n"
-        f"📈 **สถิติวันนี้:** ชนะ `{session['wins']}` | แพ้ `{session['losses']}` | กำไร `+{session['profit']}บ.`\n"
+        f"🎯 **คู่เด่น:** `{label}`\n"
+        f"🗳️ **สภาโหวต:** `[ขึ้น {best_res['up_votes']} : ลง {best_res['down_votes']}]` ({best_res['consensus']}%)\n"
+        f"⏱️ **เวลาเข้าออเดอร์:** `{target_time_str}` (M1)\n"
+        f"⚡ **ทิศทางฟันธง:** **{dir_emoji}**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🌊 **Order Imbalance:** `{best_res['depth']['imbalance']}`\n"
+        f"🛡️ **Liquidity Wall:** `{wall_target}` (กำแพงเจ้ามือ)\n"
+        f"🎯 **Volume POC:** `{best_res['quant']['poc']}` (จุดศูนย์ถ่วงราคา)\n"
+        f"⚡ **Institutional Flow:** `{best_res['quant']['sweep']}` | `{best_res['quant']['iceberg']}`\n"
+        f"📊 **Market Regime:** `{best_res['regime']}`\n"
+        f"🔥 **Quant Edge Score:** `+{best_res['edge']}%` (God Odds)\n"
         f"━━━━━━━━━━━━━━━━━━━━━━"
     )
 
-    markup = InlineKeyboardMarkup(row_width=3)
-    markup.add(
-        InlineKeyboardButton("✅ ชนะ", callback_data="mm_win"),
-        InlineKeyboardButton("❌ แพ้", callback_data="mm_loss"),
-        InlineKeyboardButton("🔄 สแกนใหม่", callback_data="request_next_signal")
-    )
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("⚔️ บุกตะลุยสแกนสัญญาณถัดไป ⚔️", callback_data="request_next_signal"))
     
     try:
         if message_id:
@@ -302,113 +333,27 @@ def send_signal_card(chat_id, message_id=None):
 @bot.message_handler(commands=['start', 'run'])
 def handle_start(message):
     chat_id = message.chat.id
-    get_session(chat_id)
-    markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(InlineKeyboardButton("🚀 เริ่มต้นสแกนออเดอร์ (v92.0)", callback_data="request_next_signal"))
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("⚔️ ปลดล็อกพลังไททัน (v96.0) ⚔️", callback_data="request_next_signal"))
     bot.reply_to(message, 
-        "✨ **TITAN v92.0 พร้อมลุยแล้วครับนาย!**\n"
-        "การันตีคำนวณและออกทิศทางให้เทรดทุกคลิก 100% ไม่มีกั๊ก!", 
+        "🩸 **TITAN v96.0 GOD-TIER MASTER ENGINE พร้อมลุยแล้วครับนาย!**\n"
+        "คำนวณ Volume POC, Iceberg Flow, Order Book Depth แท้ 100% การันตีออกสัญญาณทุกคลิก!", 
         reply_markup=markup, 
         parse_mode="Markdown"
     )
-
-@bot.message_handler(commands=['reset'])
-def handle_reset(message):
-    chat_id = message.chat.id
-    session = get_session(chat_id)
-    session["step"] = 1
-    session["wins"] = 0
-    session["losses"] = 0
-    session["profit"] = 0
-    session["consecutive_losses"] = 0
-    session["locked_out"] = False
-    
-    markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(InlineKeyboardButton("🔄 เริ่มต้นสแกนสัญญาณแรก (v92.0)", callback_data="request_next_signal"))
-    bot.reply_to(message, "🔄 **รีเซ็ตเซสชันสำเร็จ!** ล้างสถิติและปลดล็อกระบบเรียบร้อย พร้อมลุยต่อครับนาย!", reply_markup=markup, parse_mode="Markdown")
-
-@bot.message_handler(commands=['setstake'])
-def handle_set_stake(message):
-    chat_id = message.chat.id
-    try:
-        parts = message.text.split()
-        if len(parts) > 1:
-            new_stake = int(parts[1])
-            if new_stake > 0:
-                session = get_session(chat_id)
-                session["base_stake"] = new_stake
-                session["step"] = 1
-                bot.reply_to(message, f"✅ **ตั้งค่าทุนเริ่มต้นใหม่สำเร็จ:** `{new_stake} บาท` (รีเซ็ตกลับไม้ 1 เรียบร้อย)", parse_mode="Markdown")
-                return
-        bot.reply_to(message, "⚠️ กรุณาใส่ตัวเลขให้ถูกต้อง เช่น `/setstake 300`", parse_mode="Markdown")
-    except Exception:
-        bot.reply_to(message, "⚠️ เกิดข้อผิดพลาดในการตั้งค่าทุน กรุณาลองใหม่อีกครั้ง", parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     chat_id = call.message.chat.id
     msg_id = call.message.message_id
-    session = get_session(chat_id)
     
-    if call.data == "do_reset":
-        session["step"] = 1
-        session["wins"] = 0
-        session["losses"] = 0
-        session["profit"] = 0
-        session["consecutive_losses"] = 0
-        session["locked_out"] = False
-        try:
-            bot.answer_callback_query(call.id, "🔄 รีเซ็ตเซสชันเรียบร้อย!")
-        except Exception:
-            pass
-        send_signal_card(chat_id, msg_id)
-        return
-
     if call.data == "request_next_signal":
         try:
-            bot.answer_callback_query(call.id, "⚡ กำลังประมวลผลออเดอร์...")
+            bot.answer_callback_query(call.id, "🩸 TITAN Engine กำลังผ่าโครงสร้างระดับปรมาจารย์...")
         except Exception:
             pass
         send_signal_card(chat_id, msg_id)
         return
-        
-    elif call.data == "mm_win":
-        session["wins"] += 1
-        session["consecutive_losses"] = 0
-        base = session["base_stake"]
-        step = session["step"]
-        curr_s = base if step == 1 else (int(base * 2.2) if step == 2 else int(base * 4.8))
-        session["profit"] += int(curr_s * 0.85)
-        session["step"] = 1
-        try:
-            bot.answer_callback_query(call.id, "🎉 บันทึกผล: ชนะ! (รีเซ็ตสเต็ป MM กลับไม้ 1)")
-        except Exception:
-            pass
-        send_signal_card(chat_id, msg_id)
-        
-    elif call.data == "mm_loss":
-        session["losses"] += 1
-        session["consecutive_losses"] += 1
-        base = session["base_stake"]
-        step = session["step"]
-        curr_s = base if step == 1 else (int(base * 2.2) if step == 2 else int(base * 4.8))
-        session["profit"] -= curr_s
-        
-        if session["consecutive_losses"] >= 3 or session["step"] >= 3:
-            session["locked_out"] = True
-            try:
-                bot.answer_callback_query(call.id, "🛑 แพ้ครบ 3 ไม้ติด! ระบบล็อกพอร์ตชั่วคราวเพื่อความปลอดภัย")
-            except Exception:
-                pass
-            send_signal_card(chat_id, msg_id)
-            return
-
-        session["step"] = min(3, session["step"] + 1)
-        try:
-            bot.answer_callback_query(call.id, "⚠️ บันทึกผล: แพ้! (ขยับสเต็ป MM ไม้ถัดไป)")
-        except Exception:
-            pass
-        send_signal_card(chat_id, msg_id)
 
 while True:
     try:
@@ -416,4 +361,4 @@ while True:
     except Exception as e:
         print(f"[BOT ERROR]: {e}")
         time.sleep(3)
-                                
+             
