@@ -5,9 +5,13 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import datetime
 import time
 import requests
+import concurrent.futures
 
 BOT_TOKEN = "8316396699:AAHff4bp0RbvYJjx-eOhuUqr4kgD-MERj-c"
 bot = telebot.TeleBot(BOT_TOKEN)
+
+# Thread Pool สำหรับจัดการคำขอแบบไม่ให้บล็อกเธรดหลัก
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
 EXACT_8X_SYMBOLS = {
     "SNAPUSDT": "Snap Inc. (OTC)",
@@ -133,7 +137,6 @@ def analyze_symbol(sym):
     body_ratio = abs(c1 - o1) / rng if rng > 0 else 0.5
     
     direction = "CALL" if ema3 >= ema8 else "PUT"
-    # คำนวณ Quality Score แบบสดๆ จากเครื่องมือทางเทคนิคจริง
     score = round(50.0 + (hist_corr * 25.0) + (min(adx, 50) * 0.3) + (body_ratio * 15.0), 2)
     
     return {
@@ -162,7 +165,7 @@ def get_best_signal():
         "rsi": 52.5, "adx": 24.1, "body_ratio": 0.65, "market_regime": "TRENDING", "score": 78.5
     }
 
-def send_fast_signal(chat_id):
+def process_and_send(chat_id):
     start_ts = time.time()
     best_res = get_best_signal()
     latency_ms = round((time.time() - start_ts) * 1000, 2)
@@ -175,7 +178,7 @@ def send_fast_signal(chat_id):
     btn_label = "CALL" if is_buy else "PUT"
 
     card_text = (
-        f"[ TITAN QUANT v101.0 ]\n"
+        f"[ TITAN QUANT v103.0 ]\n"
         f"----------------------------------------\n"
         f"🎯 คู่เด่นคำนวณสด: {label}\n"
         f"🌐 สภาวะตลาด: {best_res['market_regime']}\n"
@@ -198,24 +201,23 @@ def send_fast_signal(chat_id):
 
 @bot.message_handler(commands=['start', 'run'])
 def handle_start(message):
-    send_fast_signal(message.chat.id)
+    executor.submit(process_and_send, message.chat.id)
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
-    chat_id = call.message.chat.id
     try:
         bot.answer_callback_query(call.id, "⚡ กำลังประมวลผล...")
     except Exception:
         pass
 
     if call.data == "request_next_signal":
-        send_fast_signal(chat_id)
+        executor.submit(process_and_send, call.message.chat.id)
 
 while True:
     try:
-        print("[BOT] Telegram polling started (v101.0)")
+        print("[BOT] Telegram polling started (v103.0)")
         bot.infinity_polling(timeout=30, long_polling_timeout=30, skip_pending=True)
     except Exception as e:
         print(f"[BOT ERROR]: {e}")
         time.sleep(3)
-    
+        
