@@ -43,7 +43,7 @@ EXACT_8X_SYMBOLS = {
 def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
-def fetch_kline(symbol, interval="1m", limit=120): # ⚡ ขยายลิมิตแท่งเทียนให้ลึกขึ้นเพื่อการสแกนที่ครอบคลุม
+def fetch_kline(symbol, interval="1m", limit=120):
     binance_symbol = symbol.replace("_OTC", "") 
     endpoints = [
         f"https://api.binance.com/api/v3/klines?symbol={binance_symbol}&interval={interval}&limit={limit}",
@@ -51,7 +51,7 @@ def fetch_kline(symbol, interval="1m", limit=120): # ⚡ ขยายลิม�
     ]
     for url in endpoints:
         try:
-            res = requests.get(url, timeout=1.2) # ⚡ ลด timeout ให้ตอบสนองไวขึ้น
+            res = requests.get(url, timeout=1.2)
             if res.status_code == 200:
                 raw = res.json()
                 df = pd.DataFrame(raw, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'])
@@ -101,7 +101,6 @@ def classify_market_regime(adx_val, atr_series):
         return "RANGING_CHOOPY"
 
 def find_historical_match(df, window_size=12):
-    # 🔍 ย้อนกราฟหาแพทเทิร์นที่เหมือนหรือคล้ายกันที่สุดแบบลึกสุดซอยทุกแท่ง
     if len(df) < window_size + 30:
         return "NEUTRAL", 0.50
     closes = df['close'].values
@@ -113,7 +112,6 @@ def find_historical_match(df, window_size=12):
     best_corr = -1.0
     pred = "CALL"
     
-    # วนลูปกวาดหากราฟประวัติศาสตร์ตั้งแต่จุดเริ่มต้นจนถึงแท่งสุดท้ายเพื่อหาความเหมือนสูงสุด
     for i in range(len(closes) - window_size - 2):
         hw = closes[i:i+window_size]
         h_std = np.std(hw)
@@ -169,6 +167,12 @@ def analyze_symbol_pro(sym):
     elif (direction == "CALL" and m5_trend == "DOWN") or (direction == "PUT" and m5_trend == "UP"):
         base_score -= 10.0
 
+    # 🛡️ ระบบกรองความปลอดภัยเสริม (Advanced Guard Filter): ตัดแต้มหรือหลีกเลี่ยงโซนอันตรายจัด (เช่น RSI ต่ำกว่า 15 หรือสูงกว่า 85)
+    if direction == "PUT" and rsi < 15.0:
+        base_score -= 25.0 # หักคะแนนหนักเพื่อไม่ให้เลือกคู่ที่อยู่ในโซน Oversold เสี่ยงเด้งสวน
+    elif direction == "CALL" and rsi > 85.0:
+        base_score -= 25.0 # หักคะแนนหนักเพื่อไม่ให้เลือกคู่ที่อยู่ในโซน Overbought เสี่ยงร่วงสวน
+
     return {
         "symbol": sym,
         "direction": direction,
@@ -187,11 +191,10 @@ def generate_fast_signal(chat_id):
     valid_results = []
     start_time = time.time()
     
-    # ⚡ เพิ่มความเร็วด้วยการเพิ่ม Max Workers เป็น 12 เพื่อประมวลผลคู่ขนานแบบเต็มสูบ
     with ThreadPoolExecutor(max_workers=12) as executor:
         futures = {executor.submit(analyze_symbol_pro, sym): sym for sym in symbol_keys}
         for future in as_completed(futures):
-            if time.time() - start_time > 6.0: # ⚡ ตัดรอบให้เร็วขึ้นทันใจ
+            if time.time() - start_time > 6.0:
                 break
             try:
                 res = future.result()
@@ -215,7 +218,7 @@ def generate_fast_signal(chat_id):
         for r in valid_results:
             sym = r['symbol']
             last_used = symbol_cooldown.get(sym, 0)
-            if current_time_epoch - last_used > 30: # ปรับ Cooldown ให้กระชับขึ้น
+            if current_time_epoch - last_used > 30:
                 available_results.append(r)
         
         if not available_results:
@@ -237,12 +240,12 @@ def generate_fast_signal(chat_id):
     trend_display = "📈 ขาขึ้น (Bullish)" if best_res['m5_trend'] == "UP" else ("📉 ขาลง (Bearish)" if best_res['m5_trend'] == "DOWN" else "⚖️ ไซด์เวย์")
 
     card_text = (
-        f"👑 **TITAN 8X ULTRA-FAST (v81.5)** 👑\n"
+        f"👑 **TITAN 8X PRO MASTER (v81.6)** 👑\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 **สถานะสแกน:** `สำเร็จ {success_count}/{total_symbols} สินทรัพย์`\n"
-        f"🎯 **คู่เด่น (Deep Match):** `{label}`\n"
+        f"🎯 **คู่เด่น (Safe-Guard Selector):** `{label}`\n"
         f"🌐 **สภาวะตลาด:** `{best_res['market_regime']}`\n"
-        f"🔗 **ความคล้ายคลึงอดีตสูงสุด:** `{best_res['hist_corr']}%`\n"
+        f"🔗 **ความคล้ายคลึงอดีต:** `{best_res['hist_corr']}%`\n"
         f"⚡ **ADX / RSI / PPO:** `{best_res['adx']} / {best_res['rsi']} / {best_res['ppo']}`\n"
         f"📈 **เทรนด์ใหญ่ M5:** `{trend_display}`\n"
         f"⏱️ **เวลาเป้าหมายอ้างอิง:** `{target_time_str}` (M1)\n\n"
@@ -254,7 +257,7 @@ def generate_fast_signal(chat_id):
 
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(InlineKeyboardButton(f"⚡ SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
-    markup.add(InlineKeyboardButton("🔄 ขอสัญญาณสดทันใจ (Deep Search)", callback_data="request_next_signal"))
+    markup.add(InlineKeyboardButton("🔄 ขอสัญญาณสดทันใจ (Safe-Guard)", callback_data="request_next_signal"))
     
     for _ in range(3):
         try:
@@ -268,12 +271,12 @@ def generate_fast_signal(chat_id):
 def handle_start(message):
     chat_id = message.chat.id
     markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(InlineKeyboardButton("🔄 กดเพื่อสแกนหาคู่ที่ดีที่สุด (v81.5)", callback_data="request_next_signal"))
+    markup.add(InlineKeyboardButton("🔄 กดเพื่อสแกนหาคู่ที่ดีที่สุด (v81.6)", callback_data="request_next_signal"))
     
     bot.reply_to(
         message, 
-        "🚀 **TITAN v81.5 ULTRA-FAST ACTIVATED** 🚀\n"
-        "ระบบค้นหาแพทเทิร์นย้อนหลังเชิงลึก (Deep Historical Search) พร้อมเร่งความเร็วการประมวลผลให้ไวขึ้นกว่าเดิม 2 เท่า!", 
+        "🚀 **TITAN v81.6 PRO MASTER ACTIVATED** 🚀\n"
+        "เพิ่มระบบกรองป้องกันโซนอันตราย (RSI Extreme Guard) พร้อมลุยสแกนลึก 24 สินทรัพย์แบบเต็มระบบ!", 
         reply_markup=markup,
         parse_mode="Markdown"
     )
@@ -284,14 +287,14 @@ def handle_callbacks(call):
     
     if call.data == "do_nothing":
         try:
-            bot.answer_callback_query(call.id, "⚡ v81.5 Ultra-Fast Active")
+            bot.answer_callback_query(call.id, "⚡ v81.6 Safe-Guard Active")
         except Exception:
             pass
         return
         
     if call.data == "request_next_signal":
         try:
-            bot.answer_callback_query(call.id, "⚡ กำลังกวาดกราฟลึกสุดซอย...")
+            bot.answer_callback_query(call.id, "⚡ กำลังสแกนคัดกรองความปลอดภัย...")
         except Exception:
             pass
         generate_fast_signal(chat_id)
@@ -303,4 +306,4 @@ while True:
     except Exception as e:
         print(f"[BOT ERROR]: {e}")
         time.sleep(3)
-        
+    
