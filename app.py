@@ -11,8 +11,6 @@ import os
 BOT_TOKEN = "8316396699:AAHff4bp0RbvYJjx-eOhuUqr4kgD-MERj-c"
 bot = telebot.TeleBot(BOT_TOKEN)
 
-LOG_FILE = "titan_signal_audit_logs.csv"
-
 EXACT_8X_SYMBOLS = {
     "SNAPUSDT": "Snap Inc. (OTC)",
     "SHIBUSDT": "SHIB/USD (OTC)",
@@ -94,11 +92,11 @@ def classify_market_regime(adx_val, atr_series):
     recent_atr_mean = atr_series.rolling(20).mean().iloc[-2] if len(atr_series) >= 20 else atr_series.iloc[-2]
     current_atr = atr_series.iloc[-2]
     if current_atr > recent_atr_mean * 1.8:
-        return "VOLATILE_SPIKE"
+        return "VOLATILE SPIKE"
     elif adx_val > 23.0:
         return "TRENDING"
     else:
-        return "RANGING_CHOOPY"
+        return "RANGING CHOOPY"
 
 def find_historical_match(df, window_size=10):
     if len(df) < window_size + 20:
@@ -165,7 +163,7 @@ def get_lightning_result():
             return res
     return None
 
-def generate_fast_signal(chat_id):
+def build_signal_card():
     start_ts = time.time()
     best_res = get_lightning_result()
     latency_ms = round((time.time() - start_ts) * 1000, 2)
@@ -182,46 +180,41 @@ def generate_fast_signal(chat_id):
     target_time_str = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M')
     
     is_buy = (best_res['direction'] == "CALL")
-    dir_emoji = "🟢 BUY (CALL) 🟢" if is_buy else "🔴 SELL (PUT) 🔴"
+    dir_text = "🟢 BUY (CALL) 🟢" if is_buy else "🔴 SELL (PUT) 🔴"
     btn_label = "CALL" if is_buy else "PUT"
 
     card_text = (
-        f"👑 **TITAN LIGHTNING v99.2** 👑\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🎯 **คู่เด่นคำนวณสด:** `{label}`\n"
-        f"🌐 **สภาวะตลาด:** `{best_res['market_regime']}`\n"
-        f"🔗 **ความคล้ายคลึงอดีต:** `{best_res['hist_corr']}%`\n"
-        f"⚡ **ADX / RSI:** `{best_res['adx']} / {best_res['rsi']}`\n"
-        f"⏱️ **เป้าหมายอ้างอิง:** `{target_time_str}` (M1)\n"
-        f"⚡ **Latency:** `{latency_ms} ms`\n\n"
-        f"🔥 **ทิศทางคำสั่ง:** **{dir_emoji}**\n\n"
-        f"⭐ **Quality Score:** `{best_res['score']}`\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"👇 *กดปุ่มด้านล่างเพื่อขอสัญญาณสดรอบถัดไป*"
+        f"[ TITAN LIGHTNING v100.0 ]\n"
+        f"----------------------------------------\n"
+        f"🎯 คู่เด่นคำนวณสด: {label}\n"
+        f"🌐 สภาวะตลาด: {best_res['market_regime']}\n"
+        f"🔗 ความคล้ายคลึงอดีต: {best_res['hist_corr']}%\n"
+        f"⚡ ADX / RSI: {best_res['adx']} / {best_res['rsi']}\n"
+        f"⏱️ เป้าหมายอ้างอิง: {target_time_str} (M1)\n"
+        f"⚡ Latency: {latency_ms} ms\n\n"
+        f"🔥 ทิศทางคำสั่ง: {dir_text}\n\n"
+        f"⭐ Quality Score: {best_res['score']}\n"
+        f"----------------------------------------"
     )
 
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(InlineKeyboardButton(f"⚡ SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
     markup.add(InlineKeyboardButton("🔄 ขอสัญญาณสดทันที", callback_data="request_next_signal"))
     
-    try:
-        bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
-    except Exception as e:
-        print(f"Send Error: {e}")
+    return card_text, markup
 
 @bot.message_handler(commands=['start', 'run'])
 def handle_start(message):
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("⚡ กดเพื่อรับสัญญาณสด (v99.2)", callback_data="request_next_signal"))
-    bot.reply_to(message, "🚀 **TITAN v99.2 UNLOCKED ENGINE ACTIVATED** 🚀\nกดปุ่มด้านล่างเพื่อรับสัญญาณต่อเนื่องได้ตลอดเวลาไม่มีค้าง!", reply_markup=markup, parse_mode="Markdown")
+    card_text, markup = build_signal_card()
+    bot.reply_to(message, card_text, reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     chat_id = call.message.chat.id
+    message_id = call.message.message_id
     
-    # เคลียร์สถานะปุ่มทันทีเพื่อไม่ให้ค้าง
     try:
-        bot.answer_callback_query(call.id, "⚡ กำลังประมวลผล...")
+        bot.answer_callback_query(call.id, "⚡ กำลังอัปเดตสัญญาณ...")
     except Exception:
         pass
 
@@ -229,14 +222,24 @@ def handle_callbacks(call):
         return
         
     if call.data == "request_next_signal":
-        # ปลดล็อกเงื่อนไข active_scans ทั้งหมด ให้ทำงานได้ต่อเนื่องทันที
-        generate_fast_signal(chat_id)
+        try:
+            new_text, new_markup = build_signal_card()
+            # ใช้ edit_message_text เพื่ออัปเดตบนการ์ดเดิม ไม่สร้างใหม่ ป้องกันปุ่มค้าง
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=new_text,
+                reply_markup=new_markup
+            )
+        except Exception as e:
+            print(f"Edit Error: {e}")
         return
 
 while True:
     try:
-        print("[BOT] Telegram polling started (v99.2)")
+        print("[BOT] Telegram polling started (v100.0)")
         bot.infinity_polling(timeout=30, long_polling_timeout=30, skip_pending=True)
     except Exception as e:
         print(f"[BOT ERROR]: {e}")
         time.sleep(3)
+    
