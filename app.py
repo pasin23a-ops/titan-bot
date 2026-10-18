@@ -5,12 +5,19 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import datetime
 import time
 import requests
+import csv
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 BOT_TOKEN = "8316396699:AAHff4bp0RbvYJjx-eOhuUqr4kgD-MERj-c"
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# 📌 รายชื่อ 24 สินทรัพย์ OTC ตามหน้าจอจริงของนาย
+LOG_FILE = "titan_signal_audit_logs.csv"
+
+# 🔒 Duplicate Scan Lock
+active_scans = set()
+
+# 📌 รายชื่อ 24 สินทรัพย์ OTC ตามหน้าจอจริง
 EXACT_8X_SYMBOLS = {
     "SNAPUSDT": "Snap Inc. (OTC)",
     "SHIBUSDT": "SHIB/USD (OTC)",
@@ -41,7 +48,7 @@ EXACT_8X_SYMBOLS = {
 def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
-def fetch_kline(symbol, interval="1m", limit=150): # ปรับ limit เป็น 150 เพื่อให้ดึง API ไวขึ้น ไม่ติด Timeout
+def fetch_kline(symbol, interval="1m", limit=150):
     binance_symbol = symbol.replace("_OTC", "") 
     endpoints = [
         f"https://api.binance.com/api/v3/klines?symbol={binance_symbol}&interval={interval}&limit={limit}",
@@ -90,6 +97,17 @@ def calculate_adx(df, period=14):
     dx = 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di + 1e-8)
     adx = dx.ewm(alpha=alpha, adjust=False).mean()
     return adx
+
+def classify_market_regime(adx_val, atr_series):
+    recent_atr_mean = atr_series.rolling(20).mean().iloc[-2] if len(atr_series) >= 20 else atr_series.iloc[-2]
+    current_atr = atr_series.iloc[-2]
+    
+    if current_atr > recent_atr_mean * 1.8:
+        return "VOLATILE_SPIKE"
+    elif adx_val > 23.0:
+        return "TRENDING"
+    else:
+        return "RANGING_CHOOPY"
 
 def find_historical_match(df, window_size=10):
     if len(df) < window_size + 30:
@@ -143,9 +161,11 @@ def analyze_symbol_pro(sym):
     rsi = calculate_rsi(df1['close'], period=14)
     rsi_curr = float(rsi.iloc[-2])
 
+    atr = calculate_atr(df1, period=14)
     adx = calculate_adx(df1, period=14)
     adx_curr = float(adx.iloc[-2])
 
+    regime = classify_market_regime(adx_curr, atr)
     hist_dir, hist_corr = find_historical_match(df1, window_size=10)
 
     c1, o1, h1, l1 = float(df1['close'].iloc[-2]), float(df1['open'].iloc[-2]), float(df1['high'].iloc[-2]), float(df1['low'].iloc[-2])
@@ -155,15 +175,14 @@ def analyze_symbol_pro(sym):
     body1 = abs(c1 - o1)
     body_ratio = body1 / rng1
 
-    direction = "CALL" if ema3_curr >= ema8_curr else "PUT"
+    base_direction = "CALL" if ema3_curr >= ema8_curr else "PUT"
+    direction = hist_dir if hist_corr > 0.80 else base_direction
 
-    # ระบบคำนวณคะแนนไดนามิกจริง (Dynamic Quality Score Calculation)
     score = 40.0
-    score += (hist_corr * 30.0) # แต้มจากความเหมือนกราฟอดีต
-    score += (min(adx_curr, 50.0) * 0.4) # แต้มจาก ADX
-    score += (body_ratio * 20.0) # แต้มจากความเต็มของเนื้อแท่งเทียน
+    score += (hist_corr * 30.0)
+    score += (min(adx_curr, 50.0) * 0.4)
+    score += (body_ratio * 20.0)
 
-    # โบนัสตามเทรนด์ M5
     if (direction == "CALL" and m5_trend == "UP") or (direction == "PUT" and m5_trend == "DOWN"):
         score += 10.0
     else:
@@ -175,57 +194,105 @@ def analyze_symbol_pro(sym):
         "hist_corr": round(hist_corr * 100, 1),
         "rsi": round(rsi_curr, 1),
         "adx": round(adx_curr, 1),
+        "body_ratio": round(body_ratio, 2),
         "m5_trend": m5_trend,
+        "market_regime": regime,
         "score": round(score, 2)
     }
 
+def log_signal_audit(audit_data):
+    file_exists = os.path.isfile(LOG_FILE)
+    try:
+        with open(LOG_FILE, mode="a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=audit_data.keys())
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow(audit_data)
+    except Exception as e:
+        print(f"[AUDIT LOG ERROR] {e}")
+
+def get_result_safely():
+    max_retries = 3
+    attempt = 0
+    while attempt < max_retries:
+        try:
+            result = analyze_symbol_pro("XRPUSDT")
+            if result is not None:
+                return result
+        except Exception as e:
+            print(f"[RETRY ERROR] {e}")
+        attempt += 1
+        time.sleep(1)
+    return None
+
 def generate_fast_signal(chat_id):
+    start_ts = time.time()
     symbol_keys = list(EXACT_8X_SYMBOLS.keys())
     total_symbols = len(symbol_keys)
     valid_results = []
-    start_time = time.time()
     
     with ThreadPoolExecutor(max_workers=12) as executor:
         futures = {executor.submit(analyze_symbol_pro, sym): sym for sym in symbol_keys}
-        for future in as_completed(futures):
-            if time.time() - start_time > 8.0:
-                break
+        for future in as_completed(futures, timeout=7.0):
             try:
                 res = future.result()
                 if res is not None:
                     valid_results.append(res)
             except Exception:
                 continue
-    
+
     success_count = len(valid_results)
 
-    # เลือกตัวที่มีคะแนนสูงสุดจากการคำนวณสดจริง 100%
     if valid_results:
-        best_res = max(valid_results, key=lambda x: x['score'])
+        best_res = max(valid_results, key=lambda x: x["score"])
     else:
-        # ป้องกันพ่นค่า static ซ้ำ: หากติดดึงข้อมูลไม่ได้ ให้สแกนดึงสด XRPUSDT หรือ BTCUSDT ใหม่เดี่ยวๆ แบบ Realtime
-        best_res = analyze_symbol_pro("XRPUSDT")
-        if best_res is None:
-            best_res = {
-                "symbol": "XRPUSDT",
-                "direction": "CALL",
-                "hist_corr": 65.4,
-                "rsi": 51.2,
-                "adx": 21.3,
-                "m5_trend": "UP",
-                "score": 62.5
-            }
-        success_count = total_symbols
+        best_res = get_result_safely()
+
+    latency_ms = round((time.time() - start_ts) * 1000, 2)
+
+    if best_res is None:
+        card_text = (
+            f"⚠️ **TITAN SYSTEM ALERT (v96.0)** ⚠️\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"❌ `DATA_UNAVAILABLE`\n"
+            f"ไม่สามารถดึงข้อมูลตลาดได้ทันที กรุณาลองใหม่อีกครั้ง\n"
+            f"⏱️ Latency: `{latency_ms} ms`"
+        )
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("🔄 ลองใหม่อีกครั้ง", callback_data="request_next_signal"))
+        try:
+            bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
+        except Exception:
+            pass
+        return
 
     best_sym = best_res['symbol']
     best_dir = best_res['direction']
     best_hist = best_res['hist_corr']
+    best_rsi = best_res['rsi']
     best_adx = best_res['adx']
+    best_body = best_res['body_ratio']
     best_score = best_res['score']
     best_trend = best_res['m5_trend']
+    best_regime = best_res['market_regime']
+
+    log_signal_audit({
+        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "symbol": best_sym,
+        "direction": best_dir,
+        "market_regime": best_regime,
+        "rsi": best_rsi,
+        "adx": best_adx,
+        "body_ratio": best_body,
+        "historical_corr": best_hist,
+        "quality_score": best_score,
+        "latency_ms": latency_ms,
+        "result": "PENDING"
+    })
 
     label = EXACT_8X_SYMBOLS.get(best_sym, best_sym)
     
+    # ⏱️ คำนวณเวลาเป้าหมายจากวินาทีที่กดจริง (+1 นาที สำหรับ M1)
     now = get_thai_time()
     target_time = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
     target_time_str = target_time.strftime('%H:%M')
@@ -236,14 +303,15 @@ def generate_fast_signal(chat_id):
     trend_display = "📈 ขาขึ้น (Bullish)" if best_trend == "UP" else ("📉 ขาลง (Bearish)" if best_trend == "DOWN" else "⚖️ ไซด์เวย์")
 
     card_text = (
-        f"👑 **TITAN DYNAMIC REALTIME (v92.0)** 👑\n"
+        f"👑 **TITAN DYNAMIC TIME (v96.0)** 👑\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 **สแกนคำนวณสดสำเร็จ:** `{success_count}/{total_symbols} สินทรัพย์`\n"
-        f"🎯 **คู่เด่นคะแนนสูงสุดจริง:** `{label}`\n"
-        f"🔗 **ความคล้ายคลึงกราฟอดีต:** `{best_hist}%`\n"
-        f"⚡ **ความแข็งแกร่งเทรนด์ (ADX):** `{best_adx}`\n"
-        f"🌐 **เทรนด์ใหญ่ M5:** `{trend_display}`\n"
-        f"⏱️ **เวลาเป้าหมายอ้างอิง:** `{target_time_str}` (M1)\n\n"
+        f"📊 **สแกนสำเร็จ:** `{success_count}/{total_symbols} สินทรัพย์`\n"
+        f"🎯 **คู่เด่นคะแนนสูงสุด:** `{label}`\n"
+        f"🌐 **สภาวะตลาด (Regime):** `{best_regime}`\n"
+        f"🔗 **ความคล้ายคลึงอดีต:** `{best_hist}%`\n"
+        f"⚡ **ADX / RSI:** `{best_adx} / {best_rsi}`\n"
+        f"⏱️ **เป้าหมายอ้างอิง:** `{target_time_str}` (M1)\n"
+        f"⚡ **Latency:** `{latency_ms} ms`\n\n"
         f"🔥 **ทิศทางคำสั่ง:** **{dir_emoji}**\n\n"
         f"⭐ **Quality Score:** `{best_score}`\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -252,7 +320,7 @@ def generate_fast_signal(chat_id):
 
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(InlineKeyboardButton(f"⚡ SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
-    markup.add(InlineKeyboardButton("🔄 ขอสัญญาณสด (Dynamic Realtime)", callback_data="request_next_signal"))
+    markup.add(InlineKeyboardButton("🔄 ขอสัญญาณสด (Dynamic Time)", callback_data="request_next_signal"))
     
     try:
         bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
@@ -262,14 +330,12 @@ def generate_fast_signal(chat_id):
 @bot.message_handler(commands=['start', 'run'])
 def handle_start(message):
     chat_id = message.chat.id
-    
     markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(InlineKeyboardButton("🔄 กดเพื่อสแกนรอบแรก (v92.0)", callback_data="request_next_signal"))
-    
+    markup.add(InlineKeyboardButton("🔄 กดเพื่อสแกนรอบแรก (v96.0)", callback_data="request_next_signal"))
     bot.reply_to(
         message, 
-        "🚀 **TITAN v92.0 DYNAMIC REALTIME ACTIVATED** 🚀\n"
-        "ถอดเงื่อนไขล็อกตายตัวออกแล้ว! คำนวณค่าตัวเลขสดจริงทุกวินาที สลับคู่ออโตแมต!", 
+        "🚀 **TITAN v96.0 DYNAMIC TIME ACTIVATED** 🚀\n"
+        "เปิดใช้งานระบบคำนวณเวลาสดตามจริง พร้อมระบบคำนวณเรียลไทม์ 24 ชม. ไร้การมโนเลข!", 
         reply_markup=markup,
         parse_mode="Markdown"
     )
@@ -279,17 +345,35 @@ def handle_callbacks(call):
     chat_id = call.message.chat.id
     
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ v92.0 Active")
+        bot.answer_callback_query(call.id, "⚡ v96.0 Active")
         return
         
     if call.data == "request_next_signal":
-        bot.answer_callback_query(call.id, "⚡ กำลังคำนวณค่าจริงเรียลไทม์...")
-        generate_fast_signal(chat_id)
+        if chat_id in active_scans:
+            bot.answer_callback_query(call.id, "⏳ กำลังประมวลผลการสแกน กรุณาสักครู่...")
+            return
+        
+        active_scans.add(chat_id)
+        try:
+            bot.answer_callback_query(call.id, "⚡ กำลังคำนวณเวลาและข้อมูลจริง...")
+            generate_fast_signal(chat_id)
+        finally:
+            active_scans.remove(chat_id)
         return
 
 while True:
     try:
-        bot.polling(none_stop=True, interval=0, timeout=20)
+        print("[BOT] Telegram polling started (v96.0)")
+        bot.infinity_polling(
+            timeout=30,
+            long_polling_timeout=30,
+            skip_pending=True
+        )
+    except KeyboardInterrupt:
+        print("[BOT] Stopped manually")
+        break
     except Exception as e:
-        time.sleep(3)
+        print(f"[BOT ERROR] {type(e).__name__}: {e}")
+        print("[BOT] Reconnecting in 5 seconds...")
+        time.sleep(5)
     
