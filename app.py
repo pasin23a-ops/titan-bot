@@ -12,7 +12,6 @@ BOT_TOKEN = "8316396699:AAHff4bp0RbvYJjx-eOhuUqr4kgD-MERj-c"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 LOG_FILE = "titan_signal_audit_logs.csv"
-active_scans = set()
 
 EXACT_8X_SYMBOLS = {
     "SNAPUSDT": "Snap Inc. (OTC)",
@@ -187,7 +186,7 @@ def generate_fast_signal(chat_id):
     btn_label = "CALL" if is_buy else "PUT"
 
     card_text = (
-        f"👑 **TITAN LIGHTNING v99.1** 👑\n"
+        f"👑 **TITAN LIGHTNING v99.2** 👑\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"🎯 **คู่เด่นคำนวณสด:** `{label}`\n"
         f"🌐 **สภาวะตลาด:** `{best_res['market_regime']}`\n"
@@ -213,16 +212,16 @@ def generate_fast_signal(chat_id):
 @bot.message_handler(commands=['start', 'run'])
 def handle_start(message):
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("⚡ กดเพื่อรับสัญญาณสด (v99.1)", callback_data="request_next_signal"))
-    bot.reply_to(message, "🚀 **TITAN v99.1 UNLOCKED ENGINE ACTIVATED** 🚀\nกดปุ่มด้านล่างเพื่อรับสัญญาณต่อเนื่องได้ตลอดเวลาไม่มีค้าง!", reply_markup=markup, parse_mode="Markdown")
+    markup.add(InlineKeyboardButton("⚡ กดเพื่อรับสัญญาณสด (v99.2)", callback_data="request_next_signal"))
+    bot.reply_to(message, "🚀 **TITAN v99.2 UNLOCKED ENGINE ACTIVATED** 🚀\nกดปุ่มด้านล่างเพื่อรับสัญญาณต่อเนื่องได้ตลอดเวลาไม่มีค้าง!", reply_markup=markup, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     chat_id = call.message.chat.id
     
-    # 🔓 เคลียร์สถานะ Loading ของปุ่มทันทีที่กด ป้องกันปุ่มค้าง
+    # เคลียร์สถานะปุ่มทันทีเพื่อไม่ให้ค้าง
     try:
-        bot.answer_callback_query(call.id)
+        bot.answer_callback_query(call.id, "⚡ กำลังประมวลผล...")
     except Exception:
         pass
 
@@ -230,21 +229,14 @@ def handle_callbacks(call):
         return
         
     if call.data == "request_next_signal":
-        if chat_id in active_scans:
-            return
-        
-        active_scans.add(chat_id)
-        try:
-            generate_fast_signal(chat_id)
-        finally:
-            active_scans.remove(chat_id)
+        # ปลดล็อกเงื่อนไข active_scans ทั้งหมด ให้ทำงานได้ต่อเนื่องทันที
+        generate_fast_signal(chat_id)
         return
 
 while True:
     try:
-        print("[BOT] Telegram polling started (v99.1)")
+        print("[BOT] Telegram polling started (v99.2)")
         bot.infinity_polling(timeout=30, long_polling_timeout=30, skip_pending=True)
     except Exception as e:
         print(f"[BOT ERROR]: {e}")
         time.sleep(3)
-        
