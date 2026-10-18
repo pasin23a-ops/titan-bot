@@ -52,7 +52,7 @@ def fetch_kline(symbol, interval="1m", limit=100):
     ]
     for url in endpoints:
         try:
-            res = requests.get(url, timeout=2.5)
+            res = requests.get(url, timeout=2.0)
             if res.status_code == 200:
                 raw = res.json()
                 df = pd.DataFrame(raw, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'])
@@ -134,7 +134,7 @@ def analyze_symbol(sym):
     atr = calculate_atr(df1)
     adx = calculate_adx(df1).iloc[-2]
     regime = classify_market_regime(adx, atr)
-    hist_dir, hist_corr = find_historical_match(df1)
+    _, hist_corr = find_historical_match(df1)
     
     c1, o1, h1, l1 = df1['close'].iloc[-2], df1['open'].iloc[-2], df1['high'].iloc[-2], df1['low'].iloc[-2]
     rng = h1 - l1
@@ -187,7 +187,7 @@ def generate_fast_signal(chat_id):
     btn_label = "CALL" if is_buy else "PUT"
 
     card_text = (
-        f"👑 **TITAN LIGHTNING v99.0** 👑\n"
+        f"👑 **TITAN LIGHTNING v99.1** 👑\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"🎯 **คู่เด่นคำนวณสด:** `{label}`\n"
         f"🌐 **สภาวะตลาด:** `{best_res['market_regime']}`\n"
@@ -213,22 +213,28 @@ def generate_fast_signal(chat_id):
 @bot.message_handler(commands=['start', 'run'])
 def handle_start(message):
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("⚡ กดเพื่อรับสัญญาณสด (v99.0)", callback_data="request_next_signal"))
-    bot.reply_to(message, "🚀 **TITAN v99.0 LIGHTNING ENGINE ACTIVATED** 🚀\nกดปุ่มด้านล่างเพื่อรับสัญญาณคำนวณสดทันที!", reply_markup=markup, parse_mode="Markdown")
+    markup.add(InlineKeyboardButton("⚡ กดเพื่อรับสัญญาณสด (v99.1)", callback_data="request_next_signal"))
+    bot.reply_to(message, "🚀 **TITAN v99.1 UNLOCKED ENGINE ACTIVATED** 🚀\nกดปุ่มด้านล่างเพื่อรับสัญญาณต่อเนื่องได้ตลอดเวลาไม่มีค้าง!", reply_markup=markup, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     chat_id = call.message.chat.id
+    
+    # 🔓 เคลียร์สถานะ Loading ของปุ่มทันทีที่กด ป้องกันปุ่มค้าง
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
+
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ v99.0 Active")
         return
+        
     if call.data == "request_next_signal":
         if chat_id in active_scans:
-            bot.answer_callback_query(call.id, "⏳ กำลังประมวลผล...")
             return
+        
         active_scans.add(chat_id)
         try:
-            bot.answer_callback_query(call.id, "⚡ กำลังคำนวณสัญญาณสด...")
             generate_fast_signal(chat_id)
         finally:
             active_scans.remove(chat_id)
@@ -236,7 +242,7 @@ def handle_callbacks(call):
 
 while True:
     try:
-        print("[BOT] Telegram polling started (v99.0)")
+        print("[BOT] Telegram polling started (v99.1)")
         bot.infinity_polling(timeout=30, long_polling_timeout=30, skip_pending=True)
     except Exception as e:
         print(f"[BOT ERROR]: {e}")
