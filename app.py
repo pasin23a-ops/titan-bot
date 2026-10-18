@@ -5,13 +5,9 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import datetime
 import time
 import requests
-import concurrent.futures
 
 BOT_TOKEN = "8316396699:AAHff4bp0RbvYJjx-eOhuUqr4kgD-MERj-c"
 bot = telebot.TeleBot(BOT_TOKEN)
-
-# Thread Pool สำหรับจัดการคำขอแบบไม่ให้บล็อกเธรดหลัก
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
 EXACT_8X_SYMBOLS = {
     "SNAPUSDT": "Snap Inc. (OTC)",
@@ -48,14 +44,15 @@ def fetch_kline(symbol, interval="1m", limit=100):
     ]
     for url in endpoints:
         try:
-            res = requests.get(url, timeout=2.0)
+            res = requests.get(url, timeout=3.0)
             if res.status_code == 200:
                 raw = res.json()
                 df = pd.DataFrame(raw, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'])
                 for col in ['open', 'high', 'low', 'close', 'volume']:
                     df[col] = df[col].astype(float)
                 return df
-        except Exception:
+        except Exception as e:
+            print(f"[API ERROR] {symbol} -> {e}")
             continue
     return None
 
@@ -165,7 +162,8 @@ def get_best_signal():
         "rsi": 52.5, "adx": 24.1, "body_ratio": 0.65, "market_regime": "TRENDING", "score": 78.5
     }
 
-def process_and_send(chat_id):
+def send_signal_directly(chat_id):
+    print(f"[SIGNAL] กำลังคำนวณและส่งสัญญาณให้ Chat ID: {chat_id}")
     start_ts = time.time()
     best_res = get_best_signal()
     latency_ms = round((time.time() - start_ts) * 1000, 2)
@@ -178,7 +176,7 @@ def process_and_send(chat_id):
     btn_label = "CALL" if is_buy else "PUT"
 
     card_text = (
-        f"[ TITAN QUANT v103.0 ]\n"
+        f"[ TITAN QUANT v104.0 ]\n"
         f"----------------------------------------\n"
         f"🎯 คู่เด่นคำนวณสด: {label}\n"
         f"🌐 สภาวะตลาด: {best_res['market_regime']}\n"
@@ -196,28 +194,30 @@ def process_and_send(chat_id):
     
     try:
         bot.send_message(chat_id, card_text, reply_markup=markup)
+        print(f"[SUCCESS] ส่งข้อความสัญญาณสำเร็จ (Latency: {latency_ms} ms)")
     except Exception as e:
-        print(f"Send Error: {e}")
+        print(f"[SEND ERROR FAILED]: {e}")
 
 @bot.message_handler(commands=['start', 'run'])
 def handle_start(message):
-    executor.submit(process_and_send, message.chat.id)
+    send_signal_directly(message.chat.id)
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
+    chat_id = call.message.chat.id
     try:
-        bot.answer_callback_query(call.id, "⚡ กำลังประมวลผล...")
+        bot.answer_callback_query(call.id, "⚡ กำลังคำนวณสัญญาณ...")
     except Exception:
         pass
 
     if call.data == "request_next_signal":
-        executor.submit(process_and_send, call.message.chat.id)
+        send_signal_directly(chat_id)
 
 while True:
     try:
-        print("[BOT] Telegram polling started (v103.0)")
+        print("[BOT] Telegram polling started (v104.0)")
         bot.infinity_polling(timeout=30, long_polling_timeout=30, skip_pending=True)
     except Exception as e:
         print(f"[BOT ERROR]: {e}")
         time.sleep(3)
-        
+
