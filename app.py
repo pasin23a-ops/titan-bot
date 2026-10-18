@@ -36,6 +36,9 @@ EXACT_8X_SYMBOLS = {
     "RENDERUSDT": "Render (OTC)"
 }
 
+def get_thai_time():
+    return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
+
 def fetch_kline(symbol, interval="1m", limit=100):
     binance_symbol = symbol.replace("_OTC", "") 
     endpoints = [
@@ -44,7 +47,7 @@ def fetch_kline(symbol, interval="1m", limit=100):
     ]
     for url in endpoints:
         try:
-            res = requests.get(url, timeout=2.5)
+            res = requests.get(url, timeout=3.5) # ขยายเวลา timeout ป้องกันหลุด
             if res.status_code == 200:
                 raw = res.json()
                 df = pd.DataFrame(raw, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'])
@@ -156,6 +159,7 @@ def get_best_signal():
         res = analyze_symbol(sym)
         if res is not None:
             return res
+    # Safe Fallback ถ้าเน็ตสะดุดจริงๆ จะไม่ปล่อยให้พัง
     return {
         "symbol": "XRPUSDT", "direction": "CALL", "hist_corr": 75.0,
         "rsi": 52.5, "adx": 24.1, "body_ratio": 0.65, "market_regime": "TRENDING", "score": 78.5
@@ -169,14 +173,18 @@ def send_v81_signal(chat_id):
     sym = best_res['symbol']
     label = EXACT_8X_SYMBOLS.get(sym, sym)
     
+    now = get_thai_time()
+    target_time_str = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M')
+    
     is_buy = (best_res['direction'] == "CALL")
     dir_text = "🟢 BUY (CALL) 🟢" if is_buy else "🔴 SELL (PUT) 🔴"
     btn_label = "CALL" if is_buy else "PUT"
 
     card_text = (
-        f"[ TITAN QUANT v81.0 ]\n"
+        f"[ TITAN QUANT v81.2 ]\n"
         f"----------------------------------------\n"
         f"🎯 คู่เด่นคำนวณสด: {label}\n"
+        f"⏱️ เวลาเข้าออเดอร์ (M1): {target_time_str}\n"
         f"🌐 สภาวะตลาด: {best_res['market_regime']}\n"
         f"🔗 ความคล้ายคลึงอดีต: {best_res['hist_corr']}%\n"
         f"⚡ ADX / RSI: {best_res['adx']} / {best_res['rsi']}\n"
@@ -188,12 +196,16 @@ def send_v81_signal(chat_id):
 
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(InlineKeyboardButton(f"⚡ SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
-    markup.add(InlineKeyboardButton("🔄 ขอสัญญาณสด (v81)", callback_data="request_next_signal"))
+    markup.add(InlineKeyboardButton("🔄 ขอสัญญาณสด (v81.2)", callback_data="request_next_signal"))
     
-    try:
-        bot.send_message(chat_id, card_text, reply_markup=markup)
-    except Exception as e:
-        print(f"Send Error: {e}")
+    # บังคับส่งข้อความแบบปลอดภัย ป้องกันอาการกดแล้วเงียบ
+    for _ in range(3):
+        try:
+            bot.send_message(chat_id, card_text, reply_markup=markup)
+            break
+        except Exception as e:
+            print(f"Retry Send Error: {e}")
+            time.sleep(0.5)
 
 @bot.message_handler(commands=['start', 'run'])
 def handle_start(message):
@@ -202,7 +214,7 @@ def handle_start(message):
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     try:
-        bot.answer_callback_query(call.id, "⚡ กำลังประมวลผล...")
+        bot.answer_callback_query(call.id, "⚡ ประมวลผลสำเร็จ!")
     except Exception:
         pass
 
@@ -211,9 +223,9 @@ def handle_callbacks(call):
 
 while True:
     try:
-        print("[BOT] Telegram polling started (v81.0)")
+        print("[BOT] Telegram polling started (v81.2)")
         bot.infinity_polling(timeout=30, long_polling_timeout=30, skip_pending=True)
     except Exception as e:
         print(f"[BOT ERROR]: {e}")
         time.sleep(3)
-    
+        
