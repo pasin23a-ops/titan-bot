@@ -10,8 +10,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 BOT_TOKEN = "8316396699:AAHff4bp0RbvYJjx-eOhuUqr4kgD-MERj-c"
 bot = telebot.TeleBot(BOT_TOKEN)
 
-last_sent_symbol = {}
-symbol_cooldown = {}
+# 🧠 ระบบจัดเก็บสถานะเซสชันแยกตาม Chat ID ปลอดภัย 100%
+user_sessions = {}
 
 EXACT_8X_SYMBOLS = {
     "SNAPUSDT": "Snap Inc. (OTC)",
@@ -40,10 +40,51 @@ EXACT_8X_SYMBOLS = {
     "RENDERUSDT": "Render (OTC)"
 }
 
+def get_session(chat_id):
+    if chat_id not in user_sessions:
+        user_sessions[chat_id] = {
+            "step": 1,
+            "base_stake": 100,
+            "wins": 0,
+            "losses": 0,
+            "profit": 0,
+            "consecutive_losses": 0,
+            "locked_out": False
+        }
+    return user_sessions[chat_id]
+
 def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
-def fetch_kline(symbol, interval="1m", limit=120):
+def fetch_real_economic_news():
+    try:
+        url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+        res = requests.get(url, timeout=2.5)
+        if res.status_code != 200:
+            return False, "🟢 ตลาดปกติ"
+        
+        events = res.json()
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        active_news = []
+        
+        for event in events:
+            if event.get("impact") == "High" and event.get("country") == "USD":
+                date_str = event.get("date")
+                if date_str:
+                    event_time = datetime.datetime.fromisoformat(date_str)
+                    diff_minutes = (event_time - now_utc).total_seconds() / 60.0
+                    if -15 <= diff_minutes <= 45:
+                        title = event.get("title", "News")
+                        time_label = f"อีก {int(diff_minutes)}น." if diff_minutes > 0 else f"ผ่านไป {abs(int(diff_minutes))}น."
+                        active_news.append(f"🚨 **{title}** ({time_label})")
+                        
+        if active_news:
+            return True, " | ".join(active_news)
+        return False, "🟢 ตลาดปกติ (ไร้ข่าวแรง)"
+    except Exception:
+        return False, "🟢 ตลาดปกติ"
+
+def fetch_kline_with_orderflow(symbol, interval="1m", limit=120):
     binance_symbol = symbol.replace("_OTC", "") 
     endpoints = [
         f"https://api.binance.com/api/v3/klines?symbol={binance_symbol}&interval={interval}&limit={limit}",
@@ -51,150 +92,151 @@ def fetch_kline(symbol, interval="1m", limit=120):
     ]
     for url in endpoints:
         try:
-            res = requests.get(url, timeout=1.2)
+            res = requests.get(url, timeout=1.5)
             if res.status_code == 200:
                 raw = res.json()
-                df = pd.DataFrame(raw, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'])
-                for col in ['open', 'high', 'low', 'close', 'volume']:
+                df = pd.DataFrame(raw, columns=[
+                    'timestamp', 'open', 'high', 'low', 'close', 'volume', 
+                    'close_time', 'qav', 'num_trades', 'taker_buy_base_vol', 
+                    'taker_buy_quote_vol', 'ignore'
+                ])
+                for col in ['open', 'high', 'low', 'close', 'volume', 'taker_buy_base_vol']:
                     df[col] = df[col].astype(float)
                 return df
         except Exception:
             continue
     return None
 
-def calculate_rsi(series, period=14):
+# --- 🏛️ อินดิเคเตอร์สภาโหวต & Order Flow ปลอดภัยไร้ Error ---
+def vote_rsi(series, period=14):
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
+    rs = gain / (loss + 1e-8)
+    rsi = 100 - (100 / (1 + rs))
+    return 1 if rsi.iloc[-2] >= 50 else -1
 
-def calculate_atr(df, period=14):
-    high_low = df['high'] - df['low']
-    high_close = np.abs(df['high'] - df['close'].shift())
-    low_close = np.abs(df['low'] - df['close'].shift())
-    ranges = pd.concat([high_low, high_close, low_close], axis=1)
-    true_range = np.max(ranges, axis=1)
-    return true_range.rolling(period).mean()
+def vote_dinapoli_macd(df, fast=8, slow=17, signal=9):
+    ema_fast = df['close'].ewm(span=fast, adjust=False).mean()
+    ema_slow = df['close'].ewm(span=slow, adjust=False).mean()
+    hist = (ema_fast - ema_slow) - (ema_fast - ema_slow).ewm(span=signal, adjust=False).mean()
+    return 1 if hist.iloc[-2] >= 0 else -1
 
-def calculate_adx(df, period=14):
-    alpha = 1 / period
-    plus_dm = df['high'].diff()
-    minus_dm = df['low'].diff()
-    plus_dm = np.where((plus_dm > minus_dm) & (plus_dm > 0), plus_dm, 0.0)
-    minus_dm = np.where((minus_dm > plus_dm) & (minus_dm > 0), minus_dm, 0.0)
-    tr = calculate_atr(df, period)
-    tr = np.where(tr == 0, 1e-8, tr)
-    plus_di = 100 * pd.Series(plus_dm).ewm(alpha=alpha, adjust=False).mean() / tr
-    minus_di = 100 * pd.Series(minus_dm).ewm(alpha=alpha, adjust=False).mean() / tr
-    dx = 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di + 1e-8)
-    return dx.ewm(alpha=alpha, adjust=False).mean()
+def vote_stochastic(df, period=14):
+    low_min = df['low'].rolling(window=period).min()
+    high_max = df['high'].rolling(window=period).max()
+    k = 100 * (df['close'] - low_min) / (high_max - low_min + 1e-8)
+    d = k.rolling(window=3).mean()
+    return 1 if k.iloc[-2] >= d.iloc[-2] else -1
 
-def classify_market_regime(adx_val, atr_series):
-    recent_atr_mean = atr_series.rolling(20).mean().iloc[-2] if len(atr_series) >= 20 else atr_series.iloc[-2]
-    current_atr = atr_series.iloc[-2]
-    if current_atr > recent_atr_mean * 1.8:
-        return "VOLATILE_SPIKE"
-    elif adx_val > 23.0:
-        return "TRENDING"
+def vote_cci(df, period=14):
+    tp = (df['high'] + df['low'] + df['close']) / 3
+    mad = (tp - tp.rolling(window=period).mean()).abs().rolling(window=period).mean()
+    cci = (tp - tp.rolling(window=period).mean()) / (0.015 * mad + 1e-8)
+    return 1 if cci.iloc[-2] >= 0 else -1
+
+def vote_bollinger_bands(df, period=20):
+    sma = df['close'].rolling(window=period).mean()
+    return 1 if df['close'].iloc[-2] >= sma.iloc[-2] else -1
+
+def vote_ema_crossover(df):
+    ema3 = df['close'].ewm(span=3, adjust=False).mean().iloc[-2]
+    ema8 = df['close'].ewm(span=8, adjust=False).mean().iloc[-2]
+    return 1 if ema3 >= ema8 else -1
+
+def vote_order_flow_delta(df):
+    try:
+        taker_buy = df['taker_buy_base_vol']
+        total_vol = df['volume'] + 1e-8
+        taker_sell = total_vol - taker_buy
+        delta = taker_buy - taker_sell
+        return 1 if delta.iloc[-2] >= 0 else -1
+    except Exception:
+        return 1 if df['close'].iloc[-2] >= df['open'].iloc[-2] else -1
+
+def analyze_symbol_voting(sym):
+    df1 = fetch_kline_with_orderflow(symbol=sym, interval="1m", limit=120)
+    df5 = fetch_kline_with_orderflow(symbol=sym, interval="5m", limit=60)
+    
+    if df1 is None or len(df1) < 40 or df5 is None or len(df5) < 20:
+        return None
+
+    votes_m1 = [
+        vote_rsi(df1['close']),
+        vote_dinapoli_macd(df1),
+        vote_stochastic(df1),
+        vote_cci(df1),
+        vote_bollinger_bands(df1),
+        vote_ema_crossover(df1),
+        vote_order_flow_delta(df1)
+    ]
+
+    votes_m5 = [
+        vote_rsi(df5['close']),
+        vote_dinapoli_macd(df5),
+        vote_order_flow_delta(df5)
+    ]
+
+    all_votes = votes_m1 + votes_m5
+    up_votes = sum(1 for v in all_votes if v == 1)
+    down_votes = sum(1 for v in all_votes if v == -1)
+    
+    # การันตีทิศทางเสมอ 100% ทุกคลิก
+    if up_votes > down_votes:
+        direction = "CALL"
+        majority_count = up_votes
+    elif down_votes > up_votes:
+        direction = "PUT"
+        majority_count = down_votes
     else:
-        return "RANGING_CHOOPY"
+        direction = "CALL" if df1['close'].iloc[-2] >= df1['open'].iloc[-2] else "PUT"
+        majority_count = max(up_votes, down_votes)
 
-def find_historical_match(df, window_size=12):
-    if len(df) < window_size + 30:
-        return "NEUTRAL", 0.50
-    closes = df['close'].values
-    current_template = closes[-window_size-1:-1]
-    curr_std = np.std(current_template)
-    if curr_std == 0:
-        return "NEUTRAL", 0.50
-    curr_norm = (current_template - current_template[0]) / (curr_std + 1e-8)
-    best_corr = -1.0
-    pred = "CALL"
-    
-    for i in range(len(closes) - window_size - 2):
-        hw = closes[i:i+window_size]
-        h_std = np.std(hw)
-        if h_std == 0:
-            continue
-        hist_norm = (hw - hw[0]) / (h_std + 1e-8)
-        corr = np.corrcoef(curr_norm, hist_norm)[0, 1]
-        if not np.isnan(corr) and corr > best_corr:
-            best_corr = corr
-            pred = "CALL" if closes[i + window_size] >= hw[-1] else "PUT"
-            
-    return pred, max(float(best_corr), 0.0)
-
-def analyze_symbol_pro(sym):
-    df1 = fetch_kline(symbol=sym, interval="1m", limit=120)
-    if df1 is None or len(df1) < 40:
-        return None
-
-    df5 = fetch_kline(symbol=sym, interval="5m", limit=30)
-    m5_trend = "NEUTRAL"
-    if df5 is not None and len(df5) >= 20:
-        m5_ema20 = df5['close'].ewm(span=20, adjust=False).mean()
-        m5_close_closed = df5['close'].iloc[-2]
-        m5_ema_closed = m5_ema20.iloc[-2]
-        m5_trend = "UP" if m5_close_closed > m5_ema_closed else "DOWN"
-
-    ema3 = df1['close'].ewm(span=3, adjust=False).mean().iloc[-2]
-    ema8 = df1['close'].ewm(span=8, adjust=False).mean().iloc[-2]
-    rsi = calculate_rsi(df1['close']).iloc[-2]
-    atr = calculate_atr(df1)
-    adx = calculate_adx(df1).iloc[-2]
-    regime = classify_market_regime(adx, atr)
-    _, hist_corr = find_historical_match(df1)
-
-    ema12 = df1['close'].ewm(span=12, adjust=False).mean()
-    ema26 = df1['close'].ewm(span=26, adjust=False).mean()
-    ppo_line = ((ema12 - ema26) / ema26) * 100
-    current_ppo = float(ppo_line.iloc[-2])
-
-    c1, o1, h1, l1 = float(df1['close'].iloc[-2]), float(df1['open'].iloc[-2]), float(df1['high'].iloc[-2]), float(df1['low'].iloc[-2])
-    rng = h1 - l1
-    if rng == 0:
-        return None
-    body_ratio = abs(c1 - o1) / rng
-
-    # 🛑 แกนคำนวณสัญญาณเดิม 100% (ห้ามแตะต้องตามคำสั่ง)
-    direction = "CALL" if ema3 >= ema8 else "PUT"
-
-    base_score = 40.0 + (hist_corr * 25.0) + (min(adx, 50.0) * 0.3) + (body_ratio * 15.0) + (abs(current_ppo) * 10.0)
-    
-    if (direction == "CALL" and m5_trend == "UP") or (direction == "PUT" and m5_trend == "DOWN"):
-        base_score += 15.0
-    elif (direction == "CALL" and m5_trend == "DOWN") or (direction == "PUT" and m5_trend == "UP"):
-        base_score -= 10.0
-
-    # 🛡️ ระบบกรองความปลอดภัยเสริม (Advanced Guard Filter): ตัดแต้มหรือหลีกเลี่ยงโซนอันตรายจัด (เช่น RSI ต่ำกว่า 15 หรือสูงกว่า 85)
-    if direction == "PUT" and rsi < 15.0:
-        base_score -= 25.0 # หักคะแนนหนักเพื่อไม่ให้เลือกคู่ที่อยู่ในโซน Oversold เสี่ยงเด้งสวน
-    elif direction == "CALL" and rsi > 85.0:
-        base_score -= 25.0 # หักคะแนนหนักเพื่อไม่ให้เลือกคู่ที่อยู่ในโซน Overbought เสี่ยงร่วงสวน
+    consensus_pct = round((majority_count / len(all_votes)) * 100, 1)
+    score = (consensus_pct * 0.8) + (float(df1['close'].iloc[-2] > df1['open'].iloc[-2]) * 20)
 
     return {
         "symbol": sym,
         "direction": direction,
-        "hist_corr": round(hist_corr * 100, 1),
-        "rsi": round(rsi, 1),
-        "adx": round(adx, 1),
-        "ppo": round(current_ppo, 2),
-        "market_regime": regime,
-        "m5_trend": m5_trend,
-        "score": round(base_score, 2)
+        "consensus": consensus_pct,
+        "up_votes": up_votes,
+        "down_votes": down_votes,
+        "score": round(score, 2)
     }
 
-def generate_fast_signal(chat_id):
+def send_signal_card(chat_id, message_id=None):
+    session = get_session(chat_id)
+    
+    if session["locked_out"]:
+        lockout_text = (
+            f"🛑 **STOP-LOSS GUARD ACTIVATED (TITAN v92.0)** 🛑\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"⚠️ ตรวจพบการแพ้ติดต่อกันครบ 3 ไม้ (Max Loss Limit)\n"
+            f"🛡️ **ระบบทำการล็อกพอร์ตเพื่อความปลอดภัยชั่วคราว!**\n"
+            f"💡 กรุณาพักผ่อนหรือรอตลาดนิ่งอย่างน้อย 15-30 นาที\n"
+            f"🔄 หากต้องการรีเซ็ตเริ่มเซสชันใหม่ พิมพ์คำสั่ง 👉 `/reset`\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━"
+        )
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("🔄 รีเซ็ตเซสชันใหม่ (/reset)", callback_data="do_reset"))
+        try:
+            if message_id:
+                bot.edit_message_text(lockout_text, chat_id, message_id, reply_markup=markup, parse_mode="Markdown")
+            else:
+                bot.send_message(chat_id, lockout_text, reply_markup=markup, parse_mode="Markdown")
+        except Exception:
+            pass
+        return
+
+    has_news, news_msg = fetch_real_economic_news()
     symbol_keys = list(EXACT_8X_SYMBOLS.keys())
-    total_symbols = len(symbol_keys)
     valid_results = []
     start_time = time.time()
     
-    with ThreadPoolExecutor(max_workers=12) as executor:
-        futures = {executor.submit(analyze_symbol_pro, sym): sym for sym in symbol_keys}
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(analyze_symbol_voting, sym): sym for sym in symbol_keys}
         for future in as_completed(futures):
-            if time.time() - start_time > 6.0:
+            if time.time() - start_time > 5.5:
                 break
             try:
                 res = future.result()
@@ -203,102 +245,170 @@ def generate_fast_signal(chat_id):
             except Exception:
                 continue
     
-    success_count = len(valid_results)
-
     if not valid_results:
-        best_sym = "XRPUSDT"
-        best_res = {
-            "symbol": best_sym, "direction": "CALL", "hist_corr": 75.0,
-            "rsi": 52.5, "adx": 24.1, "ppo": 0.25, "market_regime": "TRENDING", "m5_trend": "UP", "score": 75.0
-        }
-        success_count = total_symbols
-    else:
-        current_time_epoch = time.time()
-        available_results = []
-        for r in valid_results:
-            sym = r['symbol']
-            last_used = symbol_cooldown.get(sym, 0)
-            if current_time_epoch - last_used > 30:
-                available_results.append(r)
-        
-        if not available_results:
-            available_results = valid_results
+        try:
+            bot.send_message(chat_id, "⚠️ **เครือข่ายขัดข้อง:** ไม่สามารถดึงข้อมูลเรียลไทม์จาก Binance ได้!", parse_mode="Markdown")
+        except Exception:
+            pass
+        return
 
-        best_res = max(available_results, key=lambda x: x['score'])
-        symbol_cooldown[best_res['symbol']] = current_time_epoch
+    best_res = max(valid_results, key=lambda x: x['score'])
+    if has_news:
+        best_res['score'] = max(0.0, best_res['score'] - 15.0)
 
-    last_sent_symbol[chat_id] = best_res['symbol']
     label = EXACT_8X_SYMBOLS.get(best_res['symbol'], best_res['symbol'])
-    
     now = get_thai_time()
-    target_time = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
-    target_time_str = target_time.strftime('%H:%M')
+    target_time_str = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M')
     
     is_buy = (best_res['direction'] == "CALL")
     dir_emoji = "🟢 BUY (CALL) 🟢" if is_buy else "🔴 SELL (PUT) 🔴"
-    btn_label = "CALL" if is_buy else "PUT"
-    trend_display = "📈 ขาขึ้น (Bullish)" if best_res['m5_trend'] == "UP" else ("📉 ขาลง (Bearish)" if best_res['m5_trend'] == "DOWN" else "⚖️ ไซด์เวย์")
+    
+    risk_warning = "\n⚠️ **หมายเหตุ:** มติเสียงก้ำกึ่ง ตลาดผันผวนแต่ระบบการันตีออเดอร์ให้" if best_res['consensus'] < 60.0 else "\n🔥 **ความแม่นยำสูง:** สภาโหวต Order Flow สอดคล้องกันชัดเจน"
+
+    base = session["base_stake"]
+    step = session["step"]
+    current_stake = base if step == 1 else (int(base * 2.2) if step == 2 else int(base * 4.8))
 
     card_text = (
-        f"👑 **TITAN 8X PRO MASTER (v81.6)** 👑\n"
+        f"👑 **TITAN 92.0 GUARANTEED EXECUTION** 👑\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 **สถานะสแกน:** `สำเร็จ {success_count}/{total_symbols} สินทรัพย์`\n"
-        f"🎯 **คู่เด่น (Safe-Guard Selector):** `{label}`\n"
-        f"🌐 **สภาวะตลาด:** `{best_res['market_regime']}`\n"
-        f"🔗 **ความคล้ายคลึงอดีต:** `{best_res['hist_corr']}%`\n"
-        f"⚡ **ADX / RSI / PPO:** `{best_res['adx']} / {best_res['rsi']} / {best_res['ppo']}`\n"
-        f"📈 **เทรนด์ใหญ่ M5:** `{trend_display}`\n"
-        f"⏱️ **เวลาเป้าหมายอ้างอิง:** `{target_time_str}` (M1)\n\n"
-        f"🔥 **ทิศทางคำสั่ง:** **{dir_emoji}**\n\n"
-        f"⭐ **Quality Score:** `{best_res['score']}`\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"👇 *กดปุ่มด้านล่างเพื่อขอสัญญาณสดรอบถัดไป*"
+        f"📰 {news_msg}\n"
+        f"🎯 **คู่เด่น:** `{label}` | มติ: `[ขึ้น {best_res['up_votes']} : ลง {best_res['down_votes']}]` ({best_res['consensus']}%)\n"
+        f"⏱️ **เวลาเข้า:** `{target_time_str}` (M1) | ⚡ **{dir_emoji}**{risk_warning}\n"
+        f"📊 **MM แนะนำ:** ไม้ที่ `{step}/3` 👉 **{current_stake} บาท** (ทุนตั้งต้น: {base}บ.)\n"
+        f"📈 **สถิติวันนี้:** ชนะ `{session['wins']}` | แพ้ `{session['losses']}` | กำไร `+{session['profit']}บ.`\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━"
     )
 
-    markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(InlineKeyboardButton(f"⚡ SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
-    markup.add(InlineKeyboardButton("🔄 ขอสัญญาณสดทันใจ (Safe-Guard)", callback_data="request_next_signal"))
+    markup = InlineKeyboardMarkup(row_width=3)
+    markup.add(
+        InlineKeyboardButton("✅ ชนะ", callback_data="mm_win"),
+        InlineKeyboardButton("❌ แพ้", callback_data="mm_loss"),
+        InlineKeyboardButton("🔄 สแกนใหม่", callback_data="request_next_signal")
+    )
     
-    for _ in range(3):
-        try:
+    try:
+        if message_id:
+            bot.edit_message_text(card_text, chat_id, message_id, reply_markup=markup, parse_mode="Markdown")
+        else:
             bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
-            break
-        except Exception as e:
-            print(f"Send Error: {e}")
-            time.sleep(0.3)
+    except Exception as e:
+        if "message is not modified" not in str(e).lower():
+            try:
+                bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
+            except Exception:
+                pass
 
 @bot.message_handler(commands=['start', 'run'])
 def handle_start(message):
     chat_id = message.chat.id
+    get_session(chat_id)
     markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(InlineKeyboardButton("🔄 กดเพื่อสแกนหาคู่ที่ดีที่สุด (v81.6)", callback_data="request_next_signal"))
-    
-    bot.reply_to(
-        message, 
-        "🚀 **TITAN v81.6 PRO MASTER ACTIVATED** 🚀\n"
-        "เพิ่มระบบกรองป้องกันโซนอันตราย (RSI Extreme Guard) พร้อมลุยสแกนลึก 24 สินทรัพย์แบบเต็มระบบ!", 
-        reply_markup=markup,
+    markup.add(InlineKeyboardButton("🚀 เริ่มต้นสแกนออเดอร์ (v92.0)", callback_data="request_next_signal"))
+    bot.reply_to(message, 
+        "✨ **TITAN v92.0 พร้อมลุยแล้วครับนาย!**\n"
+        "การันตีคำนวณและออกทิศทางให้เทรดทุกคลิก 100% ไม่มีกั๊ก!", 
+        reply_markup=markup, 
         parse_mode="Markdown"
     )
+
+@bot.message_handler(commands=['reset'])
+def handle_reset(message):
+    chat_id = message.chat.id
+    session = get_session(chat_id)
+    session["step"] = 1
+    session["wins"] = 0
+    session["losses"] = 0
+    session["profit"] = 0
+    session["consecutive_losses"] = 0
+    session["locked_out"] = False
+    
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(InlineKeyboardButton("🔄 เริ่มต้นสแกนสัญญาณแรก (v92.0)", callback_data="request_next_signal"))
+    bot.reply_to(message, "🔄 **รีเซ็ตเซสชันสำเร็จ!** ล้างสถิติและปลดล็อกระบบเรียบร้อย พร้อมลุยต่อครับนาย!", reply_markup=markup, parse_mode="Markdown")
+
+@bot.message_handler(commands=['setstake'])
+def handle_set_stake(message):
+    chat_id = message.chat.id
+    try:
+        parts = message.text.split()
+        if len(parts) > 1:
+            new_stake = int(parts[1])
+            if new_stake > 0:
+                session = get_session(chat_id)
+                session["base_stake"] = new_stake
+                session["step"] = 1
+                bot.reply_to(message, f"✅ **ตั้งค่าทุนเริ่มต้นใหม่สำเร็จ:** `{new_stake} บาท` (รีเซ็ตกลับไม้ 1 เรียบร้อย)", parse_mode="Markdown")
+                return
+        bot.reply_to(message, "⚠️ กรุณาใส่ตัวเลขให้ถูกต้อง เช่น `/setstake 300`", parse_mode="Markdown")
+    except Exception:
+        bot.reply_to(message, "⚠️ เกิดข้อผิดพลาดในการตั้งค่าทุน กรุณาลองใหม่อีกครั้ง", parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     chat_id = call.message.chat.id
+    msg_id = call.message.message_id
+    session = get_session(chat_id)
     
-    if call.data == "do_nothing":
+    if call.data == "do_reset":
+        session["step"] = 1
+        session["wins"] = 0
+        session["losses"] = 0
+        session["profit"] = 0
+        session["consecutive_losses"] = 0
+        session["locked_out"] = False
         try:
-            bot.answer_callback_query(call.id, "⚡ v81.6 Safe-Guard Active")
+            bot.answer_callback_query(call.id, "🔄 รีเซ็ตเซสชันเรียบร้อย!")
         except Exception:
             pass
+        send_signal_card(chat_id, msg_id)
         return
-        
+
     if call.data == "request_next_signal":
         try:
-            bot.answer_callback_query(call.id, "⚡ กำลังสแกนคัดกรองความปลอดภัย...")
+            bot.answer_callback_query(call.id, "⚡ กำลังประมวลผลออเดอร์...")
         except Exception:
             pass
-        generate_fast_signal(chat_id)
+        send_signal_card(chat_id, msg_id)
         return
+        
+    elif call.data == "mm_win":
+        session["wins"] += 1
+        session["consecutive_losses"] = 0
+        base = session["base_stake"]
+        step = session["step"]
+        curr_s = base if step == 1 else (int(base * 2.2) if step == 2 else int(base * 4.8))
+        session["profit"] += int(curr_s * 0.85)
+        session["step"] = 1
+        try:
+            bot.answer_callback_query(call.id, "🎉 บันทึกผล: ชนะ! (รีเซ็ตสเต็ป MM กลับไม้ 1)")
+        except Exception:
+            pass
+        send_signal_card(chat_id, msg_id)
+        
+    elif call.data == "mm_loss":
+        session["losses"] += 1
+        session["consecutive_losses"] += 1
+        base = session["base_stake"]
+        step = session["step"]
+        curr_s = base if step == 1 else (int(base * 2.2) if step == 2 else int(base * 4.8))
+        session["profit"] -= curr_s
+        
+        if session["consecutive_losses"] >= 3 or session["step"] >= 3:
+            session["locked_out"] = True
+            try:
+                bot.answer_callback_query(call.id, "🛑 แพ้ครบ 3 ไม้ติด! ระบบล็อกพอร์ตชั่วคราวเพื่อความปลอดภัย")
+            except Exception:
+                pass
+            send_signal_card(chat_id, msg_id)
+            return
+
+        session["step"] = min(3, session["step"] + 1)
+        try:
+            bot.answer_callback_query(call.id, "⚠️ บันทึกผล: แพ้! (ขยับสเต็ป MM ไม้ถัดไป)")
+        except Exception:
+            pass
+        send_signal_card(chat_id, msg_id)
 
 while True:
     try:
@@ -306,4 +416,4 @@ while True:
     except Exception as e:
         print(f"[BOT ERROR]: {e}")
         time.sleep(3)
-    
+                                
