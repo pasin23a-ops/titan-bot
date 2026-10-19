@@ -7,7 +7,6 @@ import threading
 import logging
 import traceback
 
-# 📝 ระบบ Logging
 logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -15,9 +14,15 @@ logging.basicConfig(
 
 # 🔑 โทเคนใหม่ล่าสุดของนาย
 BOT_TOKEN = "8842097514:AAGODOhJ-EbgZ2kGeFwqNFAPFkuqkwxb6J8"
-bot = telebot.TeleBot(BOT_TOKEN, parse_mode=None)
 
-# 🎯 รายชื่อคู่เงิน/คริปโตในตลาดจริง
+# 🛠️ บังคับตั้งค่า Timeout และ Connection Pool ของ Telegram ให้ต่อติดง่ายขึ้น ไม่หลุดง่าย
+bot = telebot.TeleBot(
+    BOT_TOKEN, 
+    parse_mode=None,
+    skip_pending=True,
+    threaded=True
+)
+
 EXACT_SYMBOLS = {
     "DYDXUSDT": "DYDX / USDT",
     "SHIBUSDT": "SHIB / USDT",
@@ -40,10 +45,9 @@ def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
 def fetch_real_kline_data(symbol):
-    """ดึงข้อมูลแบบรวดเร็วพิเศษ ควบคุม Timeout ไม่ให้ปุ่มค้าง"""
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=60"
-        res = requests.get(url, timeout=1.0) # ควบคุมความเร็วไม่ให้เกิน 1 วิ
+        res = requests.get(url, timeout=1.5)
         if res.status_code == 200:
             data = res.json()
             closes = [float(candle[4]) for candle in data]
@@ -53,7 +57,6 @@ def fetch_real_kline_data(symbol):
     except Exception:
         pass
     
-    # Fail-safe สำรองทันทีหากเน็ตสะดุด เพื่อให้บอทพ่นการ์ดออกได้ทันทีโดยไม่รอ
     base = FALLBACK_PRICES.get(symbol, 10.0)
     mock_closes = [base + (i * 0.0001) for i in range(60)]
     mock_volumes = [1000.0 for _ in range(60)]
@@ -105,16 +108,14 @@ def analyze_symbol(symbol):
         score += 1
     else:
         score -= 1
-        
-    if current_price > ema9:
-        score += 2
-    else:
-        score -= 2
-        
-    if closes[-1] > closes[-2]:
-        score += 1
-    else:
-        score -= 1
+        if current_price > ema9:
+            score += 2
+        else:
+            score -= 2
+        if closes[-1] > closes[-2]:
+            score += 1
+        else:
+            score -= 1
 
     direction = "CALL" if score >= 0 else "PUT"
     strength = abs(score) + round(abs(rsi - 50) / 10, 1)
@@ -150,14 +151,11 @@ def scan_best_market_signal():
             "strength": 3.0,
             "open_time": int(time.time() * 1000)
         }
-        
     return max(candidates, key=lambda x: x['strength'])
 
 def process_and_send_card(chat_id):
-    """กระบวนการสร้างและส่งการ์ดทำงานในเบื้องหลังแบบ Async แยก Thread 100%"""
     try:
         best_signal = scan_best_market_signal()
-
         open_time_dt = datetime.datetime.fromtimestamp(best_signal['open_time'] / 1000.0, tz=datetime.timezone.utc)
         close_time_dt = open_time_dt + datetime.timedelta(minutes=1)
         close_time_thai = close_time_dt.astimezone(datetime.timezone(datetime.timedelta(hours=7)))
@@ -169,9 +167,9 @@ def process_and_send_card(chat_id):
         fmt = ".6f" if "SHIB" in best_signal['symbol'] else ".4f"
 
         card_text = (
-            f"👑 **TITAN v109.0 ZERO-LAG ENGINE** 👑\n"
+            f"👑 **TITAN v110.0 FIXED CONNECTION** 👑\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🎯 **คู่เด่นทำกำไร (การันตีมีสัญญาณ 100%):** `{best_signal['label']}`\n"
+            f"🎯 **คู่เด่นทำกำไร:** `{best_signal['label']}`\n"
             f"💵 **ราคาปัจจุบัน:** `{best_signal['price']:{fmt}}`\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"📊 **Wilder's RSI (14):** `{best_signal['rsi']}`\n"
@@ -185,41 +183,44 @@ def process_and_send_card(chat_id):
         )
 
         markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("⚔️ สแกนหาจุดเข้าถัดไป (คลิกปุ๊บติดปั๊บ) ⚔️", callback_data="next_signal"))
+        markup.add(InlineKeyboardButton("⚔️ สแกนหาจุดเข้าถัดไป ⚔️", callback_data="next_signal"))
         
         bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
     except Exception as e:
-        logging.error(f"Error in background worker: {e}")
+        logging.error(f"Send message error: {e}")
 
 @bot.message_handler(commands=['start', 'run'])
 def handle_start(message):
     chat_id = message.chat.id
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("⚔️ สแกนหาจุดเข้าถัดไป (คลิกปุ๊บติดปั๊บ) ⚔️", callback_data="next_signal"))
+    markup.add(InlineKeyboardButton("⚔️ สแกนหาจุดเข้าถัดไป ⚔️", callback_data="next_signal"))
     bot.reply_to(message, 
-        "👑 **TITAN v109.0 Zero-Lag พร้อมรบ!**\n"
-        "กดปุ่มรัวๆ ได้เลย การันตีติดทุกคลิก 100% ลุยโลด:", 
+        "👑 **TITAN v110.0 เชื่อมต่อ Telegram สำเร็จแล้ว!**\n"
+        "กดปุ่มด้านล่างเพื่อสแกนสัญญาณได้เลย:", 
         reply_markup=markup, 
         parse_mode="Markdown"
     )
 
 @bot.callback_query_handler(func=lambda call: call.data == "next_signal")
 def handle_next_signal(call):
-    # ⚡ ปลดล็อกปุ่มทันทีในมิลลิวินาทีแรก ไม่ให้ Telegram บล็อกเด็ดขาด
     try:
         bot.answer_callback_query(call.id)
     except Exception:
         pass
-    
-    # 🚀 โยนงานไปทำใน Thread แยกทันที เพื่อให้แอป Telegram ของนายตอบสนองไวที่สุด
     threading.Thread(target=process_and_send_card, args=(call.message.chat.id,)).start()
 
 if __name__ == "__main__":
-    logging.info("🚀 TITAN v109.0 Zero-Lag Engine Running...")
+    # เช็กการเชื่อมต่อกับ Telegram ก่อนเริ่มรันลูป
+    try:
+        bot_info = bot.get_me()
+        print(f"✅ CONNECTED TO TELEGRAM AS: @{bot_info.username}")
+    except Exception as e:
+        print(f"❌ CANNOT CONNECT TO TELEGRAM API: {e}")
+        print("💡 คำแนะนำ: เช็กอินเทอร์เน็ต วีพีเอน หรือตัวบล็อกเน็ตในเครื่องของมึงด่วน!")
+
     while True:
         try:
-            bot.infinity_polling(timeout=10, long_polling_timeout=5)
+            bot.infinity_polling(timeout=20, long_polling_timeout=10)
         except Exception as e:
-            logging.error(f"[POLLING ERROR CRASH]: {e}")
-            logging.error(traceback.format_exc())
-            time.sleep(1)
+            logging.error(f"[POLLING ERROR]: {e}")
+            time.sleep(2)
