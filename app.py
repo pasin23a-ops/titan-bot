@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 BOT_TOKEN = "8316396699:AAHff4bp0RbvYJjx-eOhuUqr4kgD-MERj-c"
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode=None)
 
-# 🎯 คัดเลือก 10 คู่ที่ดีที่สุดจาก 24 คู่เดิม
+# 🎯 10 คู่คัดเกรดระดับปรมาจารย์ (Elite 10 Watchlist)
 EXACT_8X_SYMBOLS = {
     "PAXGUSDT": "XAUUSD (ทองคำ OTC)",
     "XRPUSDT": "Ripple (OTC)",
@@ -55,7 +55,7 @@ def fetch_real_economic_news():
     except Exception:
         return False, "🛡️ ตลาดปกติ"
 
-def fetch_kline_with_orderflow(symbol, interval="1m", limit=120):
+def fetch_kline_data(symbol, interval="1m", limit=120):
     binance_symbol = symbol.replace("_OTC", "") 
     url = f"https://api.binance.com/api/v3/klines?symbol={binance_symbol}&interval={interval}&limit={limit}"
     try:
@@ -102,26 +102,44 @@ def fetch_binance_depth_orderbook(symbol, limit=20):
         pass
     return {"imbalance": "BALANCED 1.0x", "buy_wall": "N/A", "sell_wall": "N/A"}
 
-def detect_master_quant_signals(df, depth):
+# 🏛️ ฟังก์ชันระดับปรมาจารย์: Volume Profile (VAH, VAL, POC) & Sweep Detector
+def detect_grandmaster_quant_signals(df):
     try:
         df['price_round'] = df['close'].round(4)
-        poc_price = df.groupby('price_round')['volume'].sum().idxmax()
+        profile = df.groupby('price_round')['volume'].sum().reset_index()
+        profile = profile.sort_values(by='volume', ascending=False)
         
-        recent_vol = df['volume'].iloc[-2]
-        avg_vol = df['volume'].rolling(14).mean().iloc[-2]
-        taker_buy = df['taker_buy_base_vol'].iloc[-2]
-        taker_sell = recent_vol - taker_buy
+        # จุดศูนย์ถ่วงราคา (POC)
+        poc_price = profile.iloc[0]['price_round']
         
-        sweep_signal = "🟢 BULLISH SWEEP" if taker_buy > (taker_sell * 1.8) else ("🔴 BEARISH SWEEP" if taker_sell > (taker_buy * 1.8) else "⚖️ BALANCED FLOW")
-        iceberg_detected = "🧊 ICEBERG DETECTED" if (recent_vol > avg_vol * 2.2) else "⚡ STANDARD FLOW"
+        # คำนวณ Value Area (70% ของปริมาณวอลุ่มรวม)
+        total_vol = profile['volume'].sum()
+        profile['cum_vol'] = profile['volume'].cumsum()
+        value_area = profile[profile['cum_vol'] <= (total_vol * 0.70)]
         
+        vah = value_area['price_round'].max()
+        val = value_area['price_round'].min()
+        
+        # ตรวจจับ Liquidity Sweep (การกวาดล้างแนวรับ/แนวต้าน)
+        high_prev = df['high'].iloc[-5:-1].max()
+        low_prev = df['low'].iloc[-5:-1].min()
+        current_close = df['close'].iloc[-2]
+        
+        if current_close > high_prev:
+            sweep_status = "🧨 BULLISH SWEEP (เบรกกวาดตับ)"
+        elif current_close < low_prev:
+            sweep_status = "🧨 BEARISH SWEEP (ดัมป์กวาดตับ)"
+        else:
+            sweep_status = "🛡️ NORMAL MICRO-STRUCTURE"
+            
         return {
             "poc": f"{poc_price:.4f}",
-            "sweep": sweep_signal,
-            "iceberg": iceberg_detected
+            "vah": f"{vah:.4f}",
+            "val": f"{val:.4f}",
+            "sweep": sweep_status
         }
     except Exception:
-        return {"poc": "N/A", "sweep": "⚖️ BALANCED FLOW", "iceberg": "⚡ STANDARD FLOW"}
+        return {"poc": "N/A", "vah": "N/A", "val": "N/A", "sweep": "🛡️ NORMAL MICRO-STRUCTURE"}
 
 def vote_rsi(series, period=14):
     delta = series.diff()
@@ -180,29 +198,19 @@ def check_market_regime(df):
         return "⚔️ สภาพตลาดสมบูรณ์"
 
 def analyze_symbol_voting(sym):
-    df1 = fetch_kline_with_orderflow(symbol=sym, interval="1m", limit=120)
-    df5 = fetch_kline_with_orderflow(symbol=sym, interval="5m", limit=60)
+    df1 = fetch_kline_data(symbol=sym, interval="1m", limit=120)
+    df5 = fetch_kline_data(symbol=sym, interval="5m", limit=60)
+    df15 = fetch_kline_data(symbol=sym, interval="15m", limit=40)
     
-    if df1 is None or len(df1) < 40 or df5 is None or len(df5) < 20:
+    if df1 is None or len(df1) < 40 or df5 is None or len(df5) < 20 or df15 is None or len(df15) < 15:
         return None
 
-    votes_m1 = [
-        vote_rsi(df1['close']),
-        vote_dinapoli_macd(df1),
-        vote_stochastic(df1),
-        vote_cci(df1),
-        vote_bollinger_bands(df1),
-        vote_ema_crossover(df1),
-        vote_order_flow_delta(df1)
-    ]
+    # Multi-Timeframe Confluence Votes
+    votes_m1 = [vote_rsi(df1['close']), vote_dinapoli_macd(df1), vote_stochastic(df1), vote_cci(df1), vote_bollinger_bands(df1), vote_ema_crossover(df1), vote_order_flow_delta(df1)]
+    votes_m5 = [vote_rsi(df5['close']), vote_dinapoli_macd(df5), vote_order_flow_delta(df5)]
+    votes_m15 = [vote_rsi(df15['close']), vote_ema_crossover(df15)]
 
-    votes_m5 = [
-        vote_rsi(df5['close']),
-        vote_dinapoli_macd(df5),
-        vote_order_flow_delta(df5)
-    ]
-
-    all_votes = votes_m1 + votes_m5
+    all_votes = votes_m1 + votes_m5 + votes_m15
     up_votes = sum(1 for v in all_votes if v == 1)
     down_votes = sum(1 for v in all_votes if v == -1)
     
@@ -219,9 +227,9 @@ def analyze_symbol_voting(sym):
     consensus_pct = round((majority_count / len(all_votes)) * 100, 1)
     regime_status = check_market_regime(df1)
     depth_data = fetch_binance_depth_orderbook(sym)
-    master_quant = detect_master_quant_signals(df1, depth_data)
+    gm_quant = detect_grandmaster_quant_signals(df1)
     
-    quant_edge = round((consensus_pct * 0.7) + (float(df1['close'].iloc[-2] > df1['open'].iloc[-2]) * 15) + 15.0, 1)
+    quant_edge = round((consensus_pct * 0.75) + (float(df1['close'].iloc[-2] > df1['open'].iloc[-2]) * 12) + 13.0, 1)
 
     return {
         "symbol": sym,
@@ -231,7 +239,7 @@ def analyze_symbol_voting(sym):
         "down_votes": down_votes,
         "regime": regime_status,
         "depth": depth_data,
-        "quant": master_quant,
+        "gm": gm_quant,
         "edge": quant_edge,
         "score": quant_edge
     }
@@ -253,7 +261,7 @@ def send_signal_card(chat_id, message_id=None):
     
     if not valid_results:
         try:
-            bot.send_message(chat_id, "⚠️ **เครือข่ายขัดข้อง:** Binance API ตอบสนองช้าเกินไป ลองใหม่อีกครั้งครับ!", parse_mode="Markdown")
+            bot.send_message(chat_id, "⚠️ **เครือข่ายขัดข้อง:** Binance API ตอบสนองช้า ลองใหม่อีกครั้งครับ!", parse_mode="Markdown")
         except Exception:
             pass
         return
@@ -271,26 +279,27 @@ def send_signal_card(chat_id, message_id=None):
     wall_target = best_res['depth']['buy_wall'] if is_buy else best_res['depth']['sell_wall']
 
     card_text = (
-        f"🩸 **TITAN v96.3 ELITE 10 MASTER ENGINE** 🩸\n"
+        f"🩸 **TITAN v96.4 GRANDMASTER QUANT ENGINE** 🩸\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📰 {news_msg}\n"
-        f"🎯 **คู่เด่น:** `{label}`\n"
-        f"🗳️ **สภาโหวต:** `[ขึ้น {best_res['up_votes']} : ลง {best_res['down_votes']}]` ({best_res['consensus']}%)\n"
+        f"🎯 **คู่เด่นระดับเซียน:** `{label}`\n"
+        f"🗳️ **สภาโหวต 3 มิติ:** `[ขึ้น {best_res['up_votes']} : ลง {best_res['down_votes']}]` ({best_res['consensus']}%)\n"
         f"⏱️ **เวลาเข้าออเดอร์:** `{target_time_str}` (M1)\n"
         f"⚡ **ทิศทางฟันธง:** **{dir_emoji}**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"🌊 **Order Imbalance:** `{best_res['depth']['imbalance']}`\n"
         f"🛡️ **Liquidity Wall:** `{wall_target}` (กำแพงเจ้ามือ)\n"
-        f"🎯 **Volume POC:** `{best_res['quant']['poc']}` (จุดศูนย์ถ่วงราคา)\n"
-        f"⚡ **Institutional Flow:** `{best_res['quant']['sweep']}` | `{best_res['quant']['iceberg']}`\n"
+        f"🎯 **Volume Profile (POC):** `{best_res['gm']['poc']}`\n"
+        f"📊 **Value Area (VAL / VAH):** `{best_res['gm']['val']} - {best_res['gm']['vah']}`\n"
+        f"🧨 **Institutional Sweep:** `{best_res['gm']['sweep']}`\n"
         f"📊 **Market Regime:** `{best_res['regime']}`\n"
-        f"🔥 **Quant Edge Score:** `+{best_res['edge']}%` (God Odds)\n"
+        f"🔥 **Grandmaster Quant Edge:** `+{best_res['edge']}%` (God Odds)\n"
         f"⏱️ Update: `{now.strftime('%H:%M:%S')}`\n"
         f"━━━━━━━━━━━━━━━━━━━━━━"
     )
 
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("⚔️ บุกตะลุยสแกนสัญญาณถัดไป ⚔️", callback_data="request_next_signal"))
+    markup.add(InlineKeyboardButton("⚔️ สแกนหาจุดเข้าคมกริบถัดไป ⚔️", callback_data="request_next_signal"))
     
     try:
         if message_id:
@@ -307,10 +316,10 @@ def send_signal_card(chat_id, message_id=None):
 def handle_start(message):
     chat_id = message.chat.id
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("⚔️ ปลดล็อกพลังไททัน (v96.3 Elite) ⚔️", callback_data="request_next_signal"))
+    markup.add(InlineKeyboardButton("⚔️ ปลดล็อกพลัง Grandmaster (v96.4) ⚔️", callback_data="request_next_signal"))
     bot.reply_to(message, 
-        "🩸 **TITAN v96.3 พร้อมลุยแล้วครับนาย!**\n"
-        "ดึง 10 คู่คัดเกรดจากตู้เซฟเดิม สแกนไวในเสี้ยววินาที กดแล้วเปลี่ยนการ์ดฉับไว!", 
+        "🩸 **TITAN v96.4 Grandmaster Quant Engine พร้อมรบแล้วครับนาย!**\n"
+        "เพิ่มระบบ Volume Profile (VAH/VAL), Liquidity Sweep และ Multi-Timeframe Confluence เรียบร้อย!", 
         reply_markup=markup, 
         parse_mode="Markdown"
     )
@@ -322,13 +331,13 @@ def handle_callbacks(call):
     
     if call.data == "request_next_signal":
         try:
-            bot.answer_callback_query(call.id, "⚡ สแกน 10 คู่คัดเกรดเรียลไทม์...")
+            bot.answer_callback_query(call.id, "⚡ ประมวลผลโครงสร้าง Grandmaster...")
         except Exception:
             pass
         send_signal_card(chat_id, msg_id)
 
 if __name__ == "__main__":
-    print("🚀 TITAN v96.3 Elite Engine Running...")
+    print("🚀 TITAN v96.4 Grandmaster Quant Engine Running...")
     while True:
         try:
             bot.polling(none_stop=True, interval=0, timeout=15)
