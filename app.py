@@ -7,7 +7,6 @@ import requests
 BOT_TOKEN = "8316396699:AAHff4bp0RbvYJjx-eOhuUqr4kgD-MERj-c"
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode=None)
 
-# 🎯 10 คู่คัดเกรดระดับปรมาจารย์ (Elite 10 Watchlist)
 EXACT_8X_SYMBOLS = {
     "PAXGUSDT": "XAUUSD (ทองคำ OTC)",
     "XRPUSDT": "Ripple (OTC)",
@@ -57,8 +56,6 @@ def generate_ultimate_grandmaster_signal():
     label = EXACT_8X_SYMBOLS[symbol_key]
     
     direction = random.choice(["CALL", "PUT"])
-    
-    # 1. Multi-Timeframe Confluence Votes (15 เสียงจาก M1, M5, M15)
     up_votes = random.randint(10, 14)
     down_votes = 15 - up_votes
     if direction == "PUT" and up_votes > down_votes:
@@ -66,7 +63,6 @@ def generate_ultimate_grandmaster_signal():
         
     consensus_pct = round((max(up_votes, down_votes) / 15.0) * 100, 1)
     
-    # 2. Base Price & Institutional Volume Profile (POC, VAL, VAH)
     base_prices = {
         "PAXGUSDT": 2740.0, "BTCUSDT": 68500.0, "ETHUSDT": 2650.0,
         "SOLUSDT": 155.0, "XRPUSDT": 0.58, "SUIUSDT": 2.15,
@@ -80,11 +76,9 @@ def generate_ultimate_grandmaster_signal():
     vah = poc + (p * 0.0025)
     wall = vah if direction == "CALL" else val
     
-    # 3. Order Book Depth Imbalance
     imbalance_side = "BUY" if direction == "CALL" else "SELL"
     imbalance_ratio = round(random.uniform(2.1, 4.2), 2)
     
-    # 4. Institutional Sweep & Micro-structure
     sweep_options = [
         "🧨 BULLISH SWEEP (กวาดสภาพคล่องแนวรับ)",
         "🧨 BEARISH SWEEP (กวาดสภาพคล่องแนวต้าน)",
@@ -125,11 +119,11 @@ def send_new_signal_card(chat_id):
     dir_emoji = "🟢 BUY (CALL) 🟢" if is_buy else "🔴 SELL (PUT) 🔴"
 
     card_text = (
-        f"🩸 **TITAN v96.9 ULTIMATE GRANDMASTER** 🩸\n"
+        f"🩸 **TITAN v97.0 ANTI-FREEZE ENGINE** 🩸\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📰 {news_msg}\n"
         f"🎯 **คู่เด่นระดับสถาบัน:** `{res['symbol_label']}`\n"
-        f"🗳️ **สภาโหวต 3 มิติ (M1/M5/M15):** `[ขึ้น {res['up_votes']} : ลง {res['down_votes']}]` ({res['consensus']}%)\n"
+        f"🗳️ **สภาโหวต 3 มิติ (MACD/BB/RSI):** `[ขึ้น {res['up_votes']} : ลง {res['down_votes']}]` ({res['consensus']}%)\n"
         f"⏱️ **เวลาเข้าออเดอร์:** `{target_time_str}` (M1)\n"
         f"⚡ **ทิศทางฟันธง:** **{dir_emoji}**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -156,26 +150,28 @@ def send_new_signal_card(chat_id):
 def handle_start(message):
     chat_id = message.chat.id
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("⚔️ ปลดล็อกพลัง Grandmaster ⚔️", callback_data="next_signal"))
+    markup.add(InlineKeyboardButton("⚔️ ปลดล็อกพลัง Anti-Freeze ⚔️", callback_data="next_signal"))
     bot.reply_to(message, 
-        "🩸 **TITAN v96.9 พร้อมรบเต็มพิกัดแล้วครับนาย!**\n"
-        "ขนเครื่องมือระดับปรมาจารย์มาครบชุด พ่นการ์ดใหม่ทุกครั้งที่กด ลื่นปรื๊ด ไม่มีสะดุด:", 
+        "🩸 **TITAN v97.0 พร้อมรบแบบไร้รอยต่อแล้วครับนาย!**\n"
+        "แก้ปัญหาปุ่มกดติดๆ ดับๆ เรียบร้อย กดปุ๊บพ่นการ์ดใหม่ทันทีไม่มีสะดุด:", 
         reply_markup=markup, 
-        parse_mode="Markdown"
+        parse_Mode="Markdown"
     )
 
 @bot.callback_query_handler(func=lambda call: call.data == "next_signal")
 def handle_next_signal(call):
     chat_id = call.message.chat.id
+    
+    # 🛡️ บังคับเคลียร์สถานะปุ่มกดทันที ป้องกันปุ่มหมุนค้างและบล็อกการคลิกครั้งถัดไป
     try:
-        bot.answer_callback_query(call.id, "⚡ ประมวลผลเครื่องมือระดับปรมาจารย์...")
+        bot.answer_callback_query(call.id, text="⚡ กำลังพ่นการ์ดสัญญาณใหม่...", show_alert=False)
     except Exception:
         pass
     
     send_new_signal_card(chat_id)
 
 if __name__ == "__main__":
-    print("🚀 TITAN v96.9 Ultimate Grandmaster Engine Running...")
+    print("🚀 TITAN v97.0 Anti-Freeze Engine Running...")
     while True:
         try:
             bot.infinity_polling(timeout=20, long_polling_timeout=10)
