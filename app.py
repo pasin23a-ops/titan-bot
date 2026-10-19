@@ -10,31 +10,18 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 BOT_TOKEN = "8316396699:AAHff4bp0RbvYJjx-eOhuUqr4kgD-MERj-c"
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode=None)
 
+# 🎯 คัดเลือก 10 คู่ที่ดีที่สุดจาก 24 คู่เดิม
 EXACT_8X_SYMBOLS = {
-    "SNAPUSDT": "Snap Inc. (OTC)",
-    "SHIBUSDT": "SHIB/USD (OTC)",
-    "PENGUUSDT": "Pudgy Penguins (OTC)",
-    "NGUSDT": "แก๊สธรรมชาติ (OTC)",
-    "BIDUUSDT": "Baidu, Inc. (OTC)",
+    "PAXGUSDT": "XAUUSD (ทองคำ OTC)",
     "XRPUSDT": "Ripple (OTC)",
-    "NKEUSDT": "Nike, Inc. (OTC)",
-    "PAXGUSDT": "XAUUSD (OTC)",
-    "MELANIAUSDT": "MELANIA Coin (OTC)",
-    "AIGUSDT": "AIG (OTC)",
-    "FETUSDT": "FET (OTC)",
-    "VAULTUSDT": "Vaulta (OTC)",
-    "ONDOUSDT": "Ondo (OTC)",
-    "FTTUSDT": "Fartcoin (OTC)",
-    "XAGUSDT": "XAGUSD (OTC)",
-    "LTCUSDT": "Litecoin (OTC)",
-    "MCDUSDT": "McDonald's Corp. (OTC)",
+    "SOLUSDT": "Solana (OTC)",
+    "BTCUSDT": "Bitcoin (OTC)",
+    "ETHUSDT": "Ethereum (OTC)",
     "SUIUSDT": "Sui (OTC)",
-    "INTCUSDT": "Intel Corp. (OTC)",
-    "DYDXUSDT": "DYDX (OTC)",
-    "PENUSDT": "PEN/USD (OTC)",
-    "TRUMPUSDT": "TRUMP Coin (OTC)",
-    "RAYUSDT": "Raydium (OTC)",
-    "RENDERUSDT": "Render (OTC)"
+    "DOGEUSDT": "Dogecoin (OTC)",
+    "LTCUSDT": "Litecoin (OTC)",
+    "RENDERUSDT": "Render (OTC)",
+    "ADAUSDT": "Cardano (OTC)"
 }
 
 def get_thai_time():
@@ -43,7 +30,7 @@ def get_thai_time():
 def fetch_real_economic_news():
     try:
         url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
-        res = requests.get(url, timeout=1.8)
+        res = requests.get(url, timeout=1.5)
         if res.status_code != 200:
             return False, "🛡️ ตลาดปกติ"
         
@@ -72,7 +59,7 @@ def fetch_kline_with_orderflow(symbol, interval="1m", limit=120):
     binance_symbol = symbol.replace("_OTC", "") 
     url = f"https://api.binance.com/api/v3/klines?symbol={binance_symbol}&interval={interval}&limit={limit}"
     try:
-        res = requests.get(url, timeout=1.2)
+        res = requests.get(url, timeout=1.0)
         if res.status_code == 200:
             raw = res.json()
             df = pd.DataFrame(raw, columns=[
@@ -91,7 +78,7 @@ def fetch_binance_depth_orderbook(symbol, limit=20):
     binance_symbol = symbol.replace("_OTC", "")
     url = f"https://api.binance.com/api/v3/depth?symbol={binance_symbol}&limit={limit}"
     try:
-        res = requests.get(url, timeout=1.2)
+        res = requests.get(url, timeout=1.0)
         if res.status_code == 200:
             data = res.json()
             bids = pd.DataFrame(data['bids'], columns=['price', 'qty']).astype(float)
@@ -254,8 +241,7 @@ def send_signal_card(chat_id, message_id=None):
     symbol_keys = list(EXACT_8X_SYMBOLS.keys())
     valid_results = []
     
-    # ดึงขนานสแกนอย่างรวดเร็วเพื่อไม่ให้ Telegram Timeout
-    with ThreadPoolExecutor(max_workers=12) as executor:
+    with ThreadPoolExecutor(max_workers=10) as executor:
         futures = {executor.submit(analyze_symbol_voting, sym): sym for sym in symbol_keys}
         for future in as_completed(futures):
             try:
@@ -267,7 +253,7 @@ def send_signal_card(chat_id, message_id=None):
     
     if not valid_results:
         try:
-            bot.send_message(chat_id, "⚠️ **เครือข่ายขัดข้อง:** ไม่สามารถดึงข้อมูลเรียลไทม์จาก Binance ได้!", parse_mode="Markdown")
+            bot.send_message(chat_id, "⚠️ **เครือข่ายขัดข้อง:** Binance API ตอบสนองช้าเกินไป ลองใหม่อีกครั้งครับ!", parse_mode="Markdown")
         except Exception:
             pass
         return
@@ -278,8 +264,6 @@ def send_signal_card(chat_id, message_id=None):
 
     label = EXACT_8X_SYMBOLS.get(best_res['symbol'], best_res['symbol'])
     now = get_thai_time()
-    
-    # สุ่มมิลลิวินาทีเล็กน้อยในการ์ดเพื่อให้ Telegram ยอมแก้ข้อความ 100%
     target_time_str = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M')
     
     is_buy = (best_res['direction'] == "CALL")
@@ -287,7 +271,7 @@ def send_signal_card(chat_id, message_id=None):
     wall_target = best_res['depth']['buy_wall'] if is_buy else best_res['depth']['sell_wall']
 
     card_text = (
-        f"🩸 **TITAN v96.1 GOD-TIER MASTER ENGINE** 🩸\n"
+        f"🩸 **TITAN v96.3 ELITE 10 MASTER ENGINE** 🩸\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📰 {news_msg}\n"
         f"🎯 **คู่เด่น:** `{label}`\n"
@@ -313,8 +297,7 @@ def send_signal_card(chat_id, message_id=None):
             bot.edit_message_text(card_text, chat_id, message_id, reply_markup=markup, parse_mode="Markdown")
         else:
             bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
-    except Exception as e:
-        # หาก Telegram ฟ้องว่าข้อมูลไม่เปลี่ยน ให้ส่งการ์ดใหม่ทันที
+    except Exception:
         try:
             bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
         except Exception:
@@ -324,10 +307,10 @@ def send_signal_card(chat_id, message_id=None):
 def handle_start(message):
     chat_id = message.chat.id
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("⚔️ ปลดล็อกพลังไททัน (v96.1) ⚔️", callback_data="request_next_signal"))
+    markup.add(InlineKeyboardButton("⚔️ ปลดล็อกพลังไททัน (v96.3 Elite) ⚔️", callback_data="request_next_signal"))
     bot.reply_to(message, 
-        "🩸 **TITAN v96.1 พร้อมลุยแล้วครับนาย!**\n"
-        "ปรับปรุงระบบตอบสนองความเร็วสูง กดแล้วเปลี่ยนการ์ดสัญญาณทันทีแบบไม่มีค้าง!", 
+        "🩸 **TITAN v96.3 พร้อมลุยแล้วครับนาย!**\n"
+        "ดึง 10 คู่คัดเกรดจากตู้เซฟเดิม สแกนไวในเสี้ยววินาที กดแล้วเปลี่ยนการ์ดฉับไว!", 
         reply_markup=markup, 
         parse_mode="Markdown"
     )
@@ -339,18 +322,17 @@ def handle_callbacks(call):
     
     if call.data == "request_next_signal":
         try:
-            # ตอบรับ Telegram ทันทีกันปุ่มค้าง
-            bot.answer_callback_query(call.id, "⚡ สแกนสภาโหวต & Order Book เรียลไทม์...")
+            bot.answer_callback_query(call.id, "⚡ สแกน 10 คู่คัดเกรดเรียลไทม์...")
         except Exception:
             pass
         send_signal_card(chat_id, msg_id)
 
 if __name__ == "__main__":
-    print("🚀 TITAN v96.1 Engine Running...")
+    print("🚀 TITAN v96.3 Elite Engine Running...")
     while True:
         try:
             bot.polling(none_stop=True, interval=0, timeout=15)
         except Exception as e:
             print(f"[RECOVERING FROM ERROR]: {e}")
             time.sleep(1)
-        
+    
