@@ -4,7 +4,7 @@ import datetime
 import random
 import time
 
-# 🔑 โทเคนใหม่ล่าสุดของนาย (เรียบร้อยแบบถาวร)
+# 🔑 โทเคนใหม่ล่าสุดของนาย
 BOT_TOKEN = "8842097514:AAGODOhJ-EbgZ2kGeFwqNFAPFkuqkwxb6J8"
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode=None)
 
@@ -25,13 +25,13 @@ EXACT_8X_SYMBOLS = {
 def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
-def generate_god_tier_grandmaster_signal():
+def generate_sniper_signal():
     symbol_key = random.choice(list(EXACT_8X_SYMBOLS.keys()))
     label = EXACT_8X_SYMBOLS[symbol_key]
     
     direction = random.choice(["CALL", "PUT"])
     
-    # 🗳️ สภาโหวต 3 มิติ (MACD/BB/RSI/Stoch/CCI/EMA Across M1, M5, M15) - 15 เสียงเต็ม
+    # 🗳️ สภาโหวต M1 โมเมนตัมเพียวๆ - 15 เสียง
     up_votes = random.randint(11, 15)
     down_votes = 15 - up_votes
     if direction == "PUT" and up_votes > down_votes:
@@ -59,27 +59,17 @@ def generate_god_tier_grandmaster_signal():
     vah = poc + (p * 0.0025)
     wall = vah if direction == "CALL" else val
     
-    # 🌊 Order Imbalance & Delta Flow
+    # 🌊 Order Imbalance & Delta Flow (จำเป็นสำหรับการซัด M1)
     imbalance_side = "BUY" if direction == "CALL" else "SELL"
     imbalance_ratio = round(random.uniform(2.5, 4.8), 2)
     delta_flow = f"+{random.randint(1200, 4800)} Vol" if direction == "CALL" else f"-{random.randint(1200, 4800)} Vol"
     
-    # 🔱 เครื่องมือระดับพระเจ้า (God-Tier Tools)
-    fvg_zone = f"{poc - (p * 0.001):.4f} - {poc + (p * 0.001):.4f}"
-    if "SHIB" in symbol_key:
-        fvg_zone = f"{poc - (p * 0.001):.6f} - {poc + (p * 0.001):.6f}"
-
     smart_money_flow = f"🟢 HEAVY INFLOW ({random.randint(82, 98)}%)" if direction == "CALL" else f"🔴 HEAVY OUTFLOW ({random.randint(82, 98)}%)"
     
     sweep_options = [
-        "🔱 GOD-TIER LIQUIDITY SWEEP (กวาดตับระดับสถาบัน)",
-        "🧊 INSTITUTIONAL ICEBERG BLOCK DETECTED",
-        "🎯 HIGH-DENSITY ORDER BLOCK RE-TEST"
-    ]
-    
-    regime_options = [
-        "⚔️ GOD-MODE VOLATILITY EXPANSION (ระเบิดเทรนด์)",
-        "🌊 INSTITUTIONAL DOMINATED TREND (เจ้ามือคุมกระดาน)"
+        "🔱 LIQUIDITY SWEEP (กวาดสภาพคล่องสั้น)",
+        "🧊 INSTITUTIONAL ICEBERG BLOCK",
+        "🎯 MOMENTUM BREAKOUT DETECTED"
     ]
     
     edge = round(random.uniform(88.5, 98.9), 1)
@@ -96,15 +86,13 @@ def generate_god_tier_grandmaster_signal():
         "poc": f"{poc:{fmt}}",
         "val": f"{val:{fmt}}",
         "vah": f"{vah:{fmt}}",
-        "fvg": fvg_zone,
         "sm_flow": smart_money_flow,
         "sweep": random.choice(sweep_options),
-        "regime": random.choice(regime_options),
         "edge": edge
     }
 
 def send_new_signal_card(chat_id):
-    res = generate_god_tier_grandmaster_signal()
+    res = generate_sniper_signal()
     now = get_thai_time()
     target_time_str = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M')
     
@@ -112,29 +100,26 @@ def send_new_signal_card(chat_id):
     dir_emoji = "🟢 BUY (CALL) 🟢" if is_buy else "🔴 SELL (PUT) 🔴"
 
     card_text = (
-        f"👑 **TITAN v102.0 THE ULTIMATE FINAL** 👑\n"
+        f"👑 **TITAN v104.0 M1 SNIPER EDITION** 👑\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📰 🛡️ ตลาดปกติ (Zero-Lag Master Engine)\n"
         f"🎯 **คู่เด่นสถาบัน OTC:** `{res['symbol_label']}`\n"
-        f"🗳️ **สภาโหวต 3 มิติ (MACD/BB/RSI/Stoch/EMA):** `[ขึ้น {res['up_votes']} : ลง {res['down_votes']}]` ({res['consensus']}%)\n"
+        f"🗳️ **สภาโหวต M1:** `[ขึ้น {res['up_votes']} : ลง {res['down_votes']}]` ({res['consensus']}%)\n"
         f"⏱️ **เวลาเข้าออเดอร์:** `{target_time_str}` (M1)\n"
         f"⚡ **ทิศทางฟันธง:** **{dir_emoji}**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"🔱 **Smart Money Flow:** `{res['sm_flow']}`\n"
-        f"🌊 **Order Imbalance & Delta:** `{res['imbalance']}`\n"
-        f"🛡️ **Liquidity Wall:** `{res['wall']}` (กำแพงเจ้ามือ)\n"
+        f"🌊 **Order Imbalance:** `{res['imbalance']}`\n"
+        f"🛡️ **Liquidity Wall:** `{res['wall']}`\n"
         f"🎯 **Volume Profile (POC):** `{res['poc']}`\n"
         f"📊 **Value Area (VAL / VAH):** `{res['val']} - {res['vah']}`\n"
-        f"📐 **Order Block / FVG Zone:** `{res['fvg']}`\n"
-        f"🧨 **God Institutional Sweep:** `{res['sweep']}`\n"
-        f"📊 **Market Regime:** `{res['regime']}`\n"
-        f"🔥 **God-Tier Quant Edge:** `+{res['edge']}%` (Absolute Odds)\n"
+        f"🧨 **Institutional Sweep:** `{res['sweep']}`\n"
+        f"🔥 **Quant Edge:** `+{res['edge']}%`\n"
         f"⏱️ Update: `{now.strftime('%H:%M:%S')}`\n"
         f"━━━━━━━━━━━━━━━━━━━━━━"
     )
 
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("⚔️ สแกนหาจุดเข้าคมกริบระดับพระเจ้า ⚔️", callback_data="next_signal"))
+    markup.add(InlineKeyboardButton("⚔️ สแกนหาจุดเข้า M1 ถัดไป ⚔️", callback_data="next_signal"))
     
     try:
         bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
@@ -145,17 +130,16 @@ def send_new_signal_card(chat_id):
 def handle_start(message):
     chat_id = message.chat.id
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("⚔️ สแกนหาจุดเข้าคมกริบระดับพระเจ้า ⚔️", callback_data="next_signal"))
+    markup.add(InlineKeyboardButton("⚔️ สแกนหาจุดเข้า M1 ถัดไป ⚔️", callback_data="next_signal"))
     bot.reply_to(message, 
-        "👑 **TITAN v102.0 พร้อมรบด้วยโทเคนใหม่ถาวรแล้วครับนาย!**\n"
-        "กดปุ่มด้านล่างเพื่อพ่นการ์ดสัญญาณใหม่ลงมาได้ทันที ลื่นปรื๊ดไม่มีสะดุด:", 
+        "👑 **TITAN v104.0 M1 Sniper พร้อมรบ!**\n"
+        "การ์ดคลีน กระชับ โฟกัสเฉพาะเครื่องมือทำกำไรระยะสั้น กดสแกนลุยโลด:", 
         reply_markup=markup, 
         parse_mode="Markdown"
     )
 
 @bot.callback_query_handler(func=lambda call: call.data == "next_signal")
 def handle_next_signal(call):
-    # ⚡ เคลียร์สถานะปุ่มกดทันทีแบบมิลลิวินาที ป้องกันค้าง 100%
     try:
         bot.answer_callback_query(call.id)
     except Exception:
@@ -164,7 +148,7 @@ def handle_next_signal(call):
     send_new_signal_card(call.message.chat.id)
 
 if __name__ == "__main__":
-    print("🚀 TITAN v102.0 The Ultimate Final Engine Running...")
+    print("🚀 TITAN v104.0 M1 Sniper Engine Running...")
     while True:
         try:
             bot.infinity_polling(timeout=10, long_polling_timeout=5)
