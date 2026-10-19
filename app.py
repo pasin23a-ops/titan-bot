@@ -1,226 +1,242 @@
+import pandas as pd
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import datetime
-import requests
 import time
-import threading
-import logging
-import traceback
+import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-logging.basicConfig(
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+BOT_TOKEN = "8316396699:AAHff4bp0RbvYJjx-eOhuUqr4kgD-MERj-c"
+bot = telebot.TeleBot(BOT_TOKEN)
 
-# 🔑 โทเคนใหม่ล่าสุดของนาย
-BOT_TOKEN = "8842097514:AAGODOhJ-EbgZ2kGeFwqNFAPFkuqkwxb6J8"
+last_sent_symbol = {}
 
-# 🛠️ บังคับตั้งค่า Timeout และ Connection Pool ของ Telegram ให้ต่อติดง่ายขึ้น ไม่หลุดง่าย
-bot = telebot.TeleBot(
-    BOT_TOKEN, 
-    parse_mode=None,
-    skip_pending=True,
-    threaded=True
-)
-
-EXACT_SYMBOLS = {
-    "DYDXUSDT": "DYDX / USDT",
-    "SHIBUSDT": "SHIB / USDT",
-    "SUIUSDT": "SUI / USDT",
-    "ONDOUSDT": "ONDO / USDT",
-    "XRPUSDT": "RIPPLE (XRP) / USDT",
-    "LTCUSDT": "Litecoin (LTC) / USDT"
-}
-
-FALLBACK_PRICES = {
-    "DYDXUSDT": 1.25,
-    "SHIBUSDT": 0.000018,
-    "SUIUSDT": 2.15,
-    "ONDOUSDT": 0.78,
-    "XRPUSDT": 0.58,
-    "LTCUSDT": 72.0
+EXACT_8X_SYMBOLS = {
+    "BTCUSDT": "BTC/USD (Proxy/Binance)",
+    "ETHUSDT": "ETH/USD (Proxy/Binance)",
+    "SOLUSDT": "SOL/USD (Proxy/Binance)",
+    "XRPUSDT": "Ripple (Proxy/Binance)",
+    "LTCUSDT": "Litecoin (Proxy/Binance)",
+    "SHIBUSDT": "SHIB/USD (Proxy/Binance)",
+    "SUIUSDT": "Sui (Proxy/Binance)",
+    "XAUUSDT": "XAUUSD (Proxy/Binance)",
+    "XAGUSDT": "XAGUSD (Proxy/Binance)",
+    "GASUSDT": "แก๊สธรรมชาติ (Proxy/Binance)",
+    "EURUSD_OTC": "EUR/USD (Proxy/Binance)",
+    "NKEUSDT": "Nike, Inc. (Proxy/Binance)",
+    "SNAPUSDT": "Snap Inc. (Proxy/Binance)",
+    "MCDUSDT": "McDonald's Corp... (Proxy/Binance)",
+    "INTCUSDT": "Intel Corporation... (Proxy/Binance)"
 }
 
 def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
-def fetch_real_kline_data(symbol):
-    try:
-        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=60"
-        res = requests.get(url, timeout=1.5)
-        if res.status_code == 200:
-            data = res.json()
-            closes = [float(candle[4]) for candle in data]
-            volumes = [float(candle[5]) for candle in data]
-            last_candle_open_time = data[-1][0]
-            return closes, volumes, last_candle_open_time
-    except Exception:
-        pass
-    
-    base = FALLBACK_PRICES.get(symbol, 10.0)
-    mock_closes = [base + (i * 0.0001) for i in range(60)]
-    mock_volumes = [1000.0 for _ in range(60)]
-    return mock_closes, mock_volumes, int(time.time() * 1000)
+def fetch_kline(symbol, interval="1m", limit=60):
+    binance_symbol = symbol.replace("_OTC", "") 
+    endpoints = [
+        f"https://api.binance.com/api/v3/klines?symbol={binance_symbol}&interval={interval}&limit={limit}",
+        f"https://api.binance.us/api/v3/klines?symbol={binance_symbol}&interval={interval}&limit={limit}"
+    ]
+    for url in endpoints:
+        try:
+            res = requests.get(url, timeout=1.5)
+            if res.status_code == 200:
+                raw = res.json()
+                df = pd.DataFrame(raw, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'])
+                for col in ['open', 'high', 'low', 'close', 'volume']:
+                    df[col] = df[col].astype(float)
+                return df
+        except Exception:
+            continue
+    return None
 
-def calculate_ema(closes, period):
-    if len(closes) < period:
-        return sum(closes) / len(closes)
-    multiplier = 2 / (period + 1)
-    ema = sum(closes[:period]) / period
-    for price in closes[period:]:
-        ema = (price - ema) * multiplier + ema
-    return ema
-
-def calculate_wilders_rsi(closes, period=14):
-    if len(closes) <= period:
-        return 50.0
-    gains, losses = [], []
-    for i in range(1, len(closes)):
-        diff = closes[i] - closes[i-1]
-        if diff > 0:
-            gains.append(diff)
-            losses.append(0.0)
-        else:
-            gains.append(0.0)
-            losses.append(abs(diff))
-    avg_gain = sum(gains[:period]) / period
-    avg_loss = sum(losses[:period]) / period
-    for i in range(period, len(gains)):
-        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
-        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
-    if avg_loss == 0:
-        return 100.0
-    rs = avg_gain / avg_loss
-    return round(100.0 - (100.0 / (1.0 + rs)), 2)
-
-def analyze_symbol(symbol):
-    closes, volumes, open_time = fetch_real_kline_data(symbol)
-    if not closes:
+def analyze_symbol_democratic(sym):
+    # 1. ดึงข้อมูลจริง M1
+    df1 = fetch_kline(symbol=sym, interval="1m", limit=60)
+    if df1 is None or len(df1) < 50:
         return None
-    
-    current_price = closes[-1]
-    rsi = calculate_wilders_rsi(closes, 14)
-    ema9 = calculate_ema(closes, 9)
-    ema21 = calculate_ema(closes, 21)
-    
-    score = 0
-    if rsi < 50:
-        score += 1
-    else:
-        score -= 1
-        if current_price > ema9:
-            score += 2
-        else:
-            score -= 2
-        if closes[-1] > closes[-2]:
-            score += 1
-        else:
-            score -= 1
 
-    direction = "CALL" if score >= 0 else "PUT"
-    strength = abs(score) + round(abs(rsi - 50) / 10, 1)
+    # 2. ดึงข้อ 2 ของโค้ดปัจจุบัน: เทรนด์ระยะยาว M5 และ M15 จริง
+    df5 = fetch_kline(symbol=sym, interval="5m", limit=30)
+    df15 = fetch_kline(symbol=sym, interval="15m", limit=30)
+    
+    m5_trend = "NEUTRAL"
+    if df5 is not None and len(df5) >= 20:
+        m5_ema20 = df5['close'].ewm(span=20, adjust=False).mean()
+        m5_trend = "UP" if df5['close'].iloc[-2] > m5_ema20.iloc[-2] else "DOWN"
+
+    m15_trend = "NEUTRAL"
+    if df15 is not None and len(df15) >= 20:
+        m15_ema20 = df15['close'].ewm(span=20, adjust=False).mean()
+        m15_trend = "UP" if df15['close'].iloc[-2] > m15_ema20.iloc[-2] else "DOWN"
+
+    # 3. คำนวณอินดิเคเตอร์จริง (PPO, RSI, Bollinger Bands)
+    ema12 = df1['close'].ewm(span=12, adjust=False).mean()
+    ema26 = df1['close'].ewm(span=26, adjust=False).mean()
+    ppo_line = ((ema12 - ema26) / ema26) * 100
+    current_ppo = float(ppo_line.iloc[-2])
+
+    delta = df1['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    rsi_series = 100 - (100 / (1 + rs))
+    current_rsi = float(rsi_series.iloc[-2])
+
+    sma20 = df1['close'].rolling(window=20).mean()
+    std20 = df1['close'].rolling(window=20).std()
+    upper_band = sma20 + (std20 * 2)
+    lower_band = sma20 - (std20 * 2)
+    band_width = float((upper_band.iloc[-2] - lower_band.iloc[-2]) / sma20.iloc[-2])
+
+    # 4. ระบบประชาธิปไตย (Democratic Voting System - นับคะแนนเสียงจริงจากทุกเครื่องมือ)
+    call_votes = 0
+    put_votes = 0
+
+    # เสียงที่ 1: PPO Momentum
+    if current_ppo > 0: call_votes += 1
+    else: put_votes += 1
+
+    # เสียงที่ 2: RSI Zone
+    if current_rsi < 45: call_votes += 1
+    elif current_rsi > 55: put_votes += 1
+
+    # เสียงที่ 3: M5 Trend Confirmation
+    if m5_trend == "UP": call_votes += 2
+    elif m5_trend == "DOWN": put_votes += 2
+
+    # เสียงที่ 4: M15 Trend Confirmation (กรอบใหญ่สุด)
+    if m15_trend == "UP": call_votes += 2
+    elif m15_trend == "DOWN": put_votes += 2
+
+    # ตัดสินทิศทางจากเสียงข้างมาก (ประชาธิปไตยแท้จริง)
+    if call_votes >= put_votes:
+        direction = "CALL"
+        majority_votes = call_votes
+        total_votes = call_votes + put_votes
+    else:
+        direction = "PUT"
+        majority_votes = put_votes
+        total_votes = call_votes + put_votes
+
+    consensus_pct = round((majority_votes / max(total_votes, 1)) * 100, 1)
+
+    # คำนวณ Score จากผลโหวตและความกว้างของกรอบจริง
+    base_score = (consensus_pct * 0.7) + (band_width * 300)
 
     return {
-        "symbol": symbol,
-        "label": EXACT_SYMBOLS[symbol],
-        "price": current_price,
-        "rsi": rsi,
-        "ema9": round(ema9, 6 if "SHIB" in symbol else 4),
-        "ema21": round(ema21, 6 if "SHIB" in symbol else 4),
+        "symbol": sym,
         "direction": direction,
-        "strength": strength,
-        "open_time": open_time
+        "ppo": current_ppo,
+        "rsi": round(current_rsi, 2),
+        "m5_trend": m5_trend,
+        "m15_trend": m15_trend,
+        "call_votes": call_votes,
+        "put_votes": put_votes,
+        "consensus": consensus_pct,
+        "score": round(base_score, 2)
     }
 
-def scan_best_market_signal():
-    candidates = []
-    for symbol in EXACT_SYMBOLS.keys():
-        res = analyze_symbol(symbol)
-        if res:
-            candidates.append(res)
-            
-    if not candidates:
-        return {
-            "symbol": "DYDXUSDT",
-            "label": "DYDX / USDT",
-            "price": 1.25,
-            "rsi": 52.5,
-            "ema9": 1.2500,
-            "ema21": 1.2490,
-            "direction": "CALL",
-            "strength": 3.0,
-            "open_time": int(time.time() * 1000)
-        }
-    return max(candidates, key=lambda x: x['strength'])
+def generate_fast_signal(chat_id):
+    symbol_keys = list(EXACT_8X_SYMBOLS.keys())
+    total_symbols = len(symbol_keys)
+    valid_results = []
+    start_time = time.time()
+    
+    with ThreadPoolExecutor(max_workers=total_symbols) as executor:
+        futures = {executor.submit(analyze_symbol_democratic, sym): sym for sym in symbol_keys}
+        for future in as_completed(futures):
+            if time.time() - start_time > 8.5:
+                break
+            try:
+                res = future.result()
+                if res is not None:
+                    valid_results.append(res)
+            except Exception:
+                continue
+    
+    success_count = len(valid_results)
 
-def process_and_send_card(chat_id):
+    if not valid_results:
+        # หากดึงข้อมูลไม่ได้จริงๆ จะแจ้งเตือนตรงๆ ไม่ออกเลขมโนมั่วซั่ว
+        try:
+            bot.send_message(chat_id, "⚠️ กำลังหน่วงกับเซิร์ฟเวอร์ตลาดจริง กรุณากดขอสัญญาณใหม่อีกครั้งทันที", parse_mode="Markdown")
+        except:
+            pass
+        return
+
+    last_sym = last_sent_symbol.get(chat_id, "")
+    filtered_results = [r for r in valid_results if r['symbol'] != last_sym]
+    if not filtered_results:
+        filtered_results = valid_results
+
+    best_res = max(filtered_results, key=lambda x: x['score'])
+    
+    last_sent_symbol[chat_id] = best_res['symbol']
+    label = EXACT_8X_SYMBOLS.get(best_res['symbol'], best_res['symbol'])
+    
+    now = get_thai_time()
+    target_time = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
+    target_time_str = target_time.strftime('%H:%M')
+    
+    is_buy = (best_res['direction'] == "CALL")
+    dir_emoji = "🟢 BUY (CALL) 🟢" if is_buy else "🔴 SELL (PUT) 🔴"
+    btn_label = "CALL" if is_buy else "PUT"
+    
+    trend_m5_disp = "📈 ขาขึ้น" if best_res['m5_trend'] == "UP" else ("📉 ขาลง" if best_res['m5_trend'] == "DOWN" else "⚖️ ไซด์เวย์")
+    trend_m15_disp = "📈 ขาขึ้น" if best_res['m15_trend'] == "UP" else ("📉 ขาลง" if best_res['m15_trend'] == "DOWN" else "⚖️ ไซด์เวย์")
+
+    card_text = (
+        f"👑 **TITAN v82.0 DEMOCRATIC REAL-DATA** 👑\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📊 **สถานะระบบ:** `ดึงข้อมูลจริง {success_count}/{total_symbols} สำเร็จ`\n"
+        f"🎯 **คู่ที่ถูกเลือก:** `{label}`\n"
+        f"🗳️ **ระบบประชาธิปไตย (โหวตขึ้น/ลง):** `[ขึ้น {best_res['call_votes']} : ลง {best_res['put_votes']}]` ({best_res['consensus']}%)\n"
+        f"🌐 **เทรนด์ใหญ่ (M5 / M15):** `{trend_m5_disp} / {trend_m15_disp}`\n"
+        f"📊 **ค่า PPO / RSI (14):** `{best_res['ppo']:.2f} / {best_res['rsi']}`\n"
+        f"⏱️ **เวลาเป้าหมายอ้างอิง:** `{target_time_str}` (M1)\n\n"
+        f"🔥 **ทิศทางคำสั่ง:** **{dir_emoji}**\n\n"
+        f"⭐ **Democratic Score:** `{best_res['score']}`\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📰 *กรองสภาวะตลาดจริง ไร้ตัวเลขมโน*"
+    )
+
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(InlineKeyboardButton(f"⚡ SIGNAL ({btn_label}) ⚡", callback_data="do_nothing"))
+    markup.add(InlineKeyboardButton("🔄 ขอสัญญาณสดทันใจ (DEMOCRATIC)", callback_data="request_next_signal"))
+    
     try:
-        best_signal = scan_best_market_signal()
-        open_time_dt = datetime.datetime.fromtimestamp(best_signal['open_time'] / 1000.0, tz=datetime.timezone.utc)
-        close_time_dt = open_time_dt + datetime.timedelta(minutes=1)
-        close_time_thai = close_time_dt.astimezone(datetime.timezone(datetime.timedelta(hours=7)))
-        target_time_str = close_time_thai.strftime('%H:%M:%S')
-
-        now = get_thai_time()
-        is_buy = (best_signal['direction'] == "CALL")
-        dir_emoji = "🟢 BUY (CALL) 🟢" if is_buy else "🔴 SELL (PUT) 🔴"
-        fmt = ".6f" if "SHIB" in best_signal['symbol'] else ".4f"
-
-        card_text = (
-            f"👑 **TITAN v110.0 FIXED CONNECTION** 👑\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🎯 **คู่เด่นทำกำไร:** `{best_signal['label']}`\n"
-            f"💵 **ราคาปัจจุบัน:** `{best_signal['price']:{fmt}}`\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📊 **Wilder's RSI (14):** `{best_signal['rsi']}`\n"
-            f"📈 **True EMA (9 / 21):** `{best_signal['ema9']} / {best_signal['ema21']}`\n"
-            f"⏱️ **หมดอายุแท่ง M1 จริง:** `{target_time_str}`\n"
-            f"⚡ **ทิศทางฟันธง:** **{dir_emoji}**\n"
-            f"🔥 **Momentum Score:** `{best_signal['strength']}`\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"⏱️ Update: `{now.strftime('%H:%M:%S')}`\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━"
-        )
-
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("⚔️ สแกนหาจุดเข้าถัดไป ⚔️", callback_data="next_signal"))
-        
         bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
     except Exception as e:
-        logging.error(f"Send message error: {e}")
+        print(f"Send Error: {e}")
 
 @bot.message_handler(commands=['start', 'run'])
 def handle_start(message):
     chat_id = message.chat.id
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("⚔️ สแกนหาจุดเข้าถัดไป ⚔️", callback_data="next_signal"))
-    bot.reply_to(message, 
-        "👑 **TITAN v110.0 เชื่อมต่อ Telegram สำเร็จแล้ว!**\n"
-        "กดปุ่มด้านล่างเพื่อสแกนสัญญาณได้เลย:", 
-        reply_markup=markup, 
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(InlineKeyboardButton("🔄 กดเพื่อสแกนรอบแรก (v82.0)", callback_data="request_next_signal"))
+    bot.reply_to(
+        message, 
+        "🚀 **TITAN v82.0 DEMOCRATIC ENGINE ACTIVATED** 🚀\n"
+        "รวมร่างระบบวิเคราะห์ M5/M15, ระบบโหวตประชาธิปไตยจากอินดิเคเตอร์จริง และตัดตัวเลขมโนออก 100% ลุยโลด:", 
+        reply_markup=markup,
         parse_mode="Markdown"
     )
 
-@bot.callback_query_handler(func=lambda call: call.data == "next_signal")
-def handle_next_signal(call):
-    try:
-        bot.answer_callback_query(call.id)
-    except Exception:
-        pass
-    threading.Thread(target=process_and_send_card, args=(call.message.chat.id,)).start()
+@bot.callback_query_handler(func=lambda call: True)
+def handle_callbacks(call):
+    chat_id = call.message.chat.id
+    if call.data == "do_nothing":
+        bot.answer_callback_query(call.id, "⚡ v82.0 Active")
+        return
+    if call.data == "request_next_signal":
+        bot.answer_callback_query(call.id, "⚡ กำลังประมวลผลข้อมูลจริง...")
+        generate_fast_signal(chat_id)
+        return
 
-if __name__ == "__main__":
-    # เช็กการเชื่อมต่อกับ Telegram ก่อนเริ่มรันลูป
+while True:
     try:
-        bot_info = bot.get_me()
-        print(f"✅ CONNECTED TO TELEGRAM AS: @{bot_info.username}")
+        bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception as e:
-        print(f"❌ CANNOT CONNECT TO TELEGRAM API: {e}")
-        print("💡 คำแนะนำ: เช็กอินเทอร์เน็ต วีพีเอน หรือตัวบล็อกเน็ตในเครื่องของมึงด่วน!")
-
-    while True:
-        try:
-            bot.infinity_polling(timeout=20, long_polling_timeout=10)
-        except Exception as e:
-            logging.error(f"[POLLING ERROR]: {e}")
-            time.sleep(2)
+        time.sleep(3)
