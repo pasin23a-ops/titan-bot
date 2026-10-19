@@ -8,7 +8,7 @@ import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 BOT_TOKEN = "8316396699:AAHff4bp0RbvYJjx-eOhuUqr4kgD-MERj-c"
-bot = telebot.TeleBot(BOT_TOKEN)
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode=None)
 
 EXACT_8X_SYMBOLS = {
     "SNAPUSDT": "Snap Inc. (OTC)",
@@ -43,7 +43,7 @@ def get_thai_time():
 def fetch_real_economic_news():
     try:
         url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
-        res = requests.get(url, timeout=2.5)
+        res = requests.get(url, timeout=1.8)
         if res.status_code != 200:
             return False, "🛡️ ตลาดปกติ"
         
@@ -70,33 +70,28 @@ def fetch_real_economic_news():
 
 def fetch_kline_with_orderflow(symbol, interval="1m", limit=120):
     binance_symbol = symbol.replace("_OTC", "") 
-    endpoints = [
-        f"https://api.binance.com/api/v3/klines?symbol={binance_symbol}&interval={interval}&limit={limit}",
-        f"https://api.binance.us/api/v3/klines?symbol={binance_symbol}&interval={interval}&limit={limit}"
-    ]
-    for url in endpoints:
-        try:
-            res = requests.get(url, timeout=1.5)
-            if res.status_code == 200:
-                raw = res.json()
-                df = pd.DataFrame(raw, columns=[
-                    'timestamp', 'open', 'high', 'low', 'close', 'volume', 
-                    'close_time', 'qav', 'num_trades', 'taker_buy_base_vol', 
-                    'taker_buy_quote_vol', 'ignore'
-                ])
-                for col in ['open', 'high', 'low', 'close', 'volume', 'taker_buy_base_vol']:
-                    df[col] = df[col].astype(float)
-                return df
-        except Exception:
-            continue
+    url = f"https://api.binance.com/api/v3/klines?symbol={binance_symbol}&interval={interval}&limit={limit}"
+    try:
+        res = requests.get(url, timeout=1.2)
+        if res.status_code == 200:
+            raw = res.json()
+            df = pd.DataFrame(raw, columns=[
+                'timestamp', 'open', 'high', 'low', 'close', 'volume', 
+                'close_time', 'qav', 'num_trades', 'taker_buy_base_vol', 
+                'taker_buy_quote_vol', 'ignore'
+            ])
+            for col in ['open', 'high', 'low', 'close', 'volume', 'taker_buy_base_vol']:
+                df[col] = df[col].astype(float)
+            return df
+    except Exception:
+        pass
     return None
 
 def fetch_binance_depth_orderbook(symbol, limit=20):
-    """ 🏛️ ดึง Order Book (Depth) แท้ 100% สแกนหากำแพงเจ้ามือ และ Order Imbalance """
     binance_symbol = symbol.replace("_OTC", "")
     url = f"https://api.binance.com/api/v3/depth?symbol={binance_symbol}&limit={limit}"
     try:
-        res = requests.get(url, timeout=1.5)
+        res = requests.get(url, timeout=1.2)
         if res.status_code == 200:
             data = res.json()
             bids = pd.DataFrame(data['bids'], columns=['price', 'qty']).astype(float)
@@ -120,15 +115,11 @@ def fetch_binance_depth_orderbook(symbol, limit=20):
         pass
     return {"imbalance": "BALANCED 1.0x", "buy_wall": "N/A", "sell_wall": "N/A"}
 
-# --- 🩸 ระบบคำนวณระดับปรมาจารย์ (Master Quantitative Modules) ---
 def detect_master_quant_signals(df, depth):
-    """ 🧠 สแกน Iceberg Orders, Volume POC & Lead-Lag Momentum """
     try:
-        # 1. คำนวณ Volume Point of Control (POC - ราคาที่มีการเทรดหนาแน่นที่สุด)
         df['price_round'] = df['close'].round(4)
         poc_price = df.groupby('price_round')['volume'].sum().idxmax()
         
-        # 2. ตรวจจับ Iceberg / Absorption Order (การกวาดซื้อขายผิดปกติ)
         recent_vol = df['volume'].iloc[-2]
         avg_vol = df['volume'].rolling(14).mean().iloc[-2]
         taker_buy = df['taker_buy_base_vol'].iloc[-2]
@@ -228,7 +219,6 @@ def analyze_symbol_voting(sym):
     up_votes = sum(1 for v in all_votes if v == 1)
     down_votes = sum(1 for v in all_votes if v == -1)
     
-    # การันตีออเดอร์ 100%
     if up_votes > down_votes:
         direction = "CALL"
         majority_count = up_votes
@@ -263,13 +253,11 @@ def send_signal_card(chat_id, message_id=None):
     has_news, news_msg = fetch_real_economic_news()
     symbol_keys = list(EXACT_8X_SYMBOLS.keys())
     valid_results = []
-    start_time = time.time()
     
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    # ดึงขนานสแกนอย่างรวดเร็วเพื่อไม่ให้ Telegram Timeout
+    with ThreadPoolExecutor(max_workers=12) as executor:
         futures = {executor.submit(analyze_symbol_voting, sym): sym for sym in symbol_keys}
         for future in as_completed(futures):
-            if time.time() - start_time > 5.5:
-                break
             try:
                 res = future.result()
                 if res is not None:
@@ -290,15 +278,16 @@ def send_signal_card(chat_id, message_id=None):
 
     label = EXACT_8X_SYMBOLS.get(best_res['symbol'], best_res['symbol'])
     now = get_thai_time()
+    
+    # สุ่มมิลลิวินาทีเล็กน้อยในการ์ดเพื่อให้ Telegram ยอมแก้ข้อความ 100%
     target_time_str = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M')
     
     is_buy = (best_res['direction'] == "CALL")
     dir_emoji = "🟢 BUY (CALL) 🟢" if is_buy else "🔴 SELL (PUT) 🔴"
     wall_target = best_res['depth']['buy_wall'] if is_buy else best_res['depth']['sell_wall']
 
-    # 🩸 การ์ดสัญญาณ TITAN GOD-TIER MASTER ENGINE (มหาโหดระดับปรมาจารย์)
     card_text = (
-        f"🩸 **TITAN v96.0 GOD-TIER MASTER ENGINE** 🩸\n"
+        f"🩸 **TITAN v96.1 GOD-TIER MASTER ENGINE** 🩸\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📰 {news_msg}\n"
         f"🎯 **คู่เด่น:** `{label}`\n"
@@ -312,6 +301,7 @@ def send_signal_card(chat_id, message_id=None):
         f"⚡ **Institutional Flow:** `{best_res['quant']['sweep']}` | `{best_res['quant']['iceberg']}`\n"
         f"📊 **Market Regime:** `{best_res['regime']}`\n"
         f"🔥 **Quant Edge Score:** `+{best_res['edge']}%` (God Odds)\n"
+        f"⏱️ Update: `{now.strftime('%H:%M:%S')}`\n"
         f"━━━━━━━━━━━━━━━━━━━━━━"
     )
 
@@ -324,20 +314,20 @@ def send_signal_card(chat_id, message_id=None):
         else:
             bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
     except Exception as e:
-        if "message is not modified" not in str(e).lower():
-            try:
-                bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
-            except Exception:
-                pass
+        # หาก Telegram ฟ้องว่าข้อมูลไม่เปลี่ยน ให้ส่งการ์ดใหม่ทันที
+        try:
+            bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
+        except Exception:
+            pass
 
 @bot.message_handler(commands=['start', 'run'])
 def handle_start(message):
     chat_id = message.chat.id
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("⚔️ ปลดล็อกพลังไททัน (v96.0) ⚔️", callback_data="request_next_signal"))
+    markup.add(InlineKeyboardButton("⚔️ ปลดล็อกพลังไททัน (v96.1) ⚔️", callback_data="request_next_signal"))
     bot.reply_to(message, 
-        "🩸 **TITAN v96.0 GOD-TIER MASTER ENGINE พร้อมลุยแล้วครับนาย!**\n"
-        "คำนวณ Volume POC, Iceberg Flow, Order Book Depth แท้ 100% การันตีออกสัญญาณทุกคลิก!", 
+        "🩸 **TITAN v96.1 พร้อมลุยแล้วครับนาย!**\n"
+        "ปรับปรุงระบบตอบสนองความเร็วสูง กดแล้วเปลี่ยนการ์ดสัญญาณทันทีแบบไม่มีค้าง!", 
         reply_markup=markup, 
         parse_mode="Markdown"
     )
@@ -349,16 +339,18 @@ def handle_callbacks(call):
     
     if call.data == "request_next_signal":
         try:
-            bot.answer_callback_query(call.id, "🩸 TITAN Engine กำลังผ่าโครงสร้างระดับปรมาจารย์...")
+            # ตอบรับ Telegram ทันทีกันปุ่มค้าง
+            bot.answer_callback_query(call.id, "⚡ สแกนสภาโหวต & Order Book เรียลไทม์...")
         except Exception:
             pass
         send_signal_card(chat_id, msg_id)
-        return
 
-while True:
-    try:
-        bot.polling(none_stop=True, interval=0, timeout=20)
-    except Exception as e:
-        print(f"[BOT ERROR]: {e}")
-        time.sleep(3)
-             
+if __name__ == "__main__":
+    print("🚀 TITAN v96.1 Engine Running...")
+    while True:
+        try:
+            bot.polling(none_stop=True, interval=0, timeout=15)
+        except Exception as e:
+            print(f"[RECOVERING FROM ERROR]: {e}")
+            time.sleep(1)
+        
