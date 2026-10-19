@@ -1,139 +1,197 @@
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import datetime
-import random
+import requests
 import time
+import logging
+import traceback
+
+# 📝 ระบบ Logging แจ้งเตือนข้อผิดพลาด
+logging.basicConfig(
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 
 # 🔑 โทเคนใหม่ล่าสุดของนาย
 BOT_TOKEN = "8842097514:AAGODOhJ-EbgZ2kGeFwqNFAPFkuqkwxb6J8"
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode=None)
 
-# 🎯 10 สินทรัพย์ OTC ชุดใหม่ของนายครบถ้วน 100%
-EXACT_8X_SYMBOLS = {
-    "DYDXUSDT": "DYDX OTC",
-    "SHIBUSDT": "SHIB/USD OTC",
-    "SUIUSDT": "SUI OTC",
-    "ONDOUSDT": "ONDO OTC",
-    "XRPUSDT": "RIPPLE OTC",
-    "VAULTAUSDT": "VAULTA OTC",
-    "SNAPUSDT": "SNAP LNE OTC",
-    "MCDUSDT": "McDonald's OTC",
-    "KOUSDT": "Coca-Cola OTC",
-    "LTCUSDT": "Litecoin OTC"
+# 🎯 รายชื่อคู่เงิน/คริปโตในตลาดจริง
+EXACT_SYMBOLS = {
+    "DYDXUSDT": "DYDX / USDT",
+    "SHIBUSDT": "SHIB / USDT",
+    "SUIUSDT": "SUI / USDT",
+    "ONDOUSDT": "ONDO / USDT",
+    "XRPUSDT": "RIPPLE (XRP) / USDT",
+    "LTCUSDT": "Litecoin (LTC) / USDT"
 }
 
 def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
-def generate_sniper_signal():
-    symbol_key = random.choice(list(EXACT_8X_SYMBOLS.keys()))
-    label = EXACT_8X_SYMBOLS[symbol_key]
+def fetch_real_kline_data(symbol):
+    """ดึงข้อมูลแท่งเทียน M1 ล่าสุด 60 แท่งจาก Binance API จริง พร้อม Timestamp"""
+    try:
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=60"
+        res = requests.get(url, timeout=2.5)
+        if res.status_code == 200:
+            data = res.json()
+            closes = [float(candle[4]) for candle in data]
+            volumes = [float(candle[5]) for candle in data]
+            last_candle_open_time = data[-1][0]
+            return closes, volumes, last_candle_open_time
+    except Exception as e:
+        logging.error(f"Error fetching data for {symbol}: {e}")
+    return None, None, None
+
+def calculate_ema(closes, period):
+    """คำนวณค่า EMA จริงแบบสะสมด้วย Multiplier"""
+    if len(closes) < period:
+        return sum(closes) / len(closes)
     
-    direction = random.choice(["CALL", "PUT"])
+    multiplier = 2 / (period + 1)
+    ema = sum(closes[:period]) / period
     
-    # 🗳️ สภาโหวต M1 โมเมนตัมเพียวๆ - 15 เสียง
-    up_votes = random.randint(11, 15)
-    down_votes = 15 - up_votes
-    if direction == "PUT" and up_votes > down_votes:
-        up_votes, down_votes = down_votes, up_votes
+    for price in closes[period:]:
+        ema = (price - ema) * multiplier + ema
+    return ema
+
+def calculate_wilders_rsi(closes, period=14):
+    """คำนวณ RSI ตามมาตรฐาน Wilder's Smoothing"""
+    if len(closes) <= period:
+        return 50.0
+
+    gains, losses = [], []
+    for i in range(1, len(closes)):
+        diff = closes[i] - closes[i-1]
+        if diff > 0:
+            gains.append(diff)
+            losses.append(0.0)
+        else:
+            gains.append(0.0)
+            losses.append(abs(diff))
+
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+
+    for i in range(period, len(gains)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return round(100.0 - (100.0 / (1.0 + rs)), 2)
+
+def analyze_symbol(symbol):
+    closes, volumes, open_time = fetch_real_kline_data(symbol)
+    if not closes or len(closes) < 30:
+        return None
+    
+    current_price = closes[-1]
+    rsi = calculate_wilders_rsi(closes, 14)
+    ema9 = calculate_ema(closes, 9)
+    ema21 = calculate_ema(closes, 21)
+    
+    # คำนวณคะแนนน้ำหนักทิศทาง
+    score = 0
+    if rsi < 50:
+        score += 1
+    else:
+        score -= 1
         
-    consensus_pct = round((max(up_votes, down_votes) / 15.0) * 100, 1)
-    
-    base_prices = {
-        "DYDXUSDT": 1.25,
-        "SHIBUSDT": 0.000018,
-        "SUIUSDT": 2.15,
-        "ONDOUSDT": 0.78,
-        "XRPUSDT": 0.58,
-        "VAULTAUSDT": 0.15,
-        "SNAPUSDT": 10.50,
-        "MCDUSDT": 295.0,
-        "KOUSDT": 68.50,
-        "LTCUSDT": 72.0
-    }
-    
-    p = base_prices.get(symbol_key, 10.0)
-    fluctuation = p * 0.0018
-    poc = p + random.uniform(-fluctuation, fluctuation)
-    val = poc - (p * 0.0025)
-    vah = poc + (p * 0.0025)
-    wall = vah if direction == "CALL" else val
-    
-    # 🌊 Order Imbalance & Delta Flow (จำเป็นสำหรับการซัด M1)
-    imbalance_side = "BUY" if direction == "CALL" else "SELL"
-    imbalance_ratio = round(random.uniform(2.5, 4.8), 2)
-    delta_flow = f"+{random.randint(1200, 4800)} Vol" if direction == "CALL" else f"-{random.randint(1200, 4800)} Vol"
-    
-    smart_money_flow = f"🟢 HEAVY INFLOW ({random.randint(82, 98)}%)" if direction == "CALL" else f"🔴 HEAVY OUTFLOW ({random.randint(82, 98)}%)"
-    
-    sweep_options = [
-        "🔱 LIQUIDITY SWEEP (กวาดสภาพคล่องสั้น)",
-        "🧊 INSTITUTIONAL ICEBERG BLOCK",
-        "🎯 MOMENTUM BREAKOUT DETECTED"
-    ]
-    
-    edge = round(random.uniform(88.5, 98.9), 1)
-    fmt = ".6f" if "SHIB" in symbol_key else ".4f"
+    if current_price > ema9:
+        score += 2
+    else:
+        score -= 2
+        
+    if closes[-1] > closes[-2]:
+        score += 1
+    else:
+        score -= 1
+
+    # บังคับตัดสินใจเด็ดขาด ห้ามเป็นกลาง (Force Direction)
+    direction = "CALL" if score >= 0 else "PUT"
+    strength = abs(score) + round(abs(rsi - 50) / 10, 1) # คำนวณความเด่นเพื่อเลือกตัวที่ดีที่สุด
 
     return {
-        "symbol_label": label,
+        "symbol": symbol,
+        "label": EXACT_SYMBOLS[symbol],
+        "price": current_price,
+        "rsi": rsi,
+        "ema9": round(ema9, 6 if "SHIB" in symbol else 4),
+        "ema21": round(ema21, 6 if "SHIB" in symbol else 4),
         "direction": direction,
-        "up_votes": up_votes,
-        "down_votes": down_votes,
-        "consensus": consensus_pct,
-        "imbalance": f"{imbalance_side} {imbalance_ratio}x ({delta_flow})",
-        "wall": f"{wall:{fmt}}",
-        "poc": f"{poc:{fmt}}",
-        "val": f"{val:{fmt}}",
-        "vah": f"{vah:{fmt}}",
-        "sm_flow": smart_money_flow,
-        "sweep": random.choice(sweep_options),
-        "edge": edge
+        "strength": strength,
+        "open_time": open_time
     }
 
-def send_new_signal_card(chat_id):
-    res = generate_sniper_signal()
-    now = get_thai_time()
-    target_time_str = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M')
+def scan_best_market_signal():
+    """สแกนทุกคู่แล้วเลือกตัวที่มีคะแนนความเด่นสูงสุดมาออกออเดอร์ทันทีทุกครั้ง"""
+    candidates = []
+    for symbol in EXACT_SYMBOLS.keys():
+        res = analyze_symbol(symbol)
+        if res:
+            candidates.append(res)
+            
+    if not candidates:
+        return None
+        
+    # เลือกตัวที่แรงส่ง (Strength) สูงที่สุดในรอบนั้นมาฟันธง
+    best_candidate = max(candidates, key=lambda x: x['strength'])
+    return best_candidate
+
+def send_real_signal_card(chat_id):
+    best_signal = scan_best_market_signal()
     
-    is_buy = (res['direction'] == "CALL")
+    if not best_signal:
+        bot.send_message(chat_id, "⚠️ ไม่สามารถเชื่อมต่อข้อมูลตลาดจริงได้ในขณะนี้")
+        return
+
+    open_time_dt = datetime.datetime.fromtimestamp(best_signal['open_time'] / 1000.0, tz=datetime.timezone.utc)
+    close_time_dt = open_time_dt + datetime.timedelta(minutes=1)
+    close_time_thai = close_time_dt.astimezone(datetime.timezone(datetime.timedelta(hours=7)))
+    target_time_str = close_time_thai.strftime('%H:%M:%S')
+
+    now = get_thai_time()
+    
+    is_buy = (best_signal['direction'] == "CALL")
     dir_emoji = "🟢 BUY (CALL) 🟢" if is_buy else "🔴 SELL (PUT) 🔴"
 
+    fmt = ".6f" if "SHIB" in best_signal['symbol'] else ".4f"
+
     card_text = (
-        f"👑 **TITAN v104.0 M1 SNIPER EDITION** 👑\n"
+        f"👑 **TITAN v107.0 FORCE-SIGNAL ENGINE** 👑\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🎯 **คู่เด่นสถาบัน OTC:** `{res['symbol_label']}`\n"
-        f"🗳️ **สภาโหวต M1:** `[ขึ้น {res['up_votes']} : ลง {res['down_votes']}]` ({res['consensus']}%)\n"
-        f"⏱️ **เวลาเข้าออเดอร์:** `{target_time_str}` (M1)\n"
+        f"🎯 **คู่เด่นทำกำไร (บังคับมีสัญญาณ):** `{best_signal['label']}`\n"
+        f"💵 **ราคาปัจจุบัน:** `{best_signal['price']:{fmt}}`\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📊 **Wilder's RSI (14):** `{best_signal['rsi']}`\n"
+        f"📈 **True EMA (9 / 21):** `{best_signal['ema9']} / {best_signal['ema21']}`\n"
+        f"⏱️ **หมดอายุแท่ง M1 จริง:** `{target_time_str}`\n"
         f"⚡ **ทิศทางฟันธง:** **{dir_emoji}**\n"
+        f"🔥 **Momentum Score:** `{best_signal['strength']}`\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🔱 **Smart Money Flow:** `{res['sm_flow']}`\n"
-        f"🌊 **Order Imbalance:** `{res['imbalance']}`\n"
-        f"🛡️ **Liquidity Wall:** `{res['wall']}`\n"
-        f"🎯 **Volume Profile (POC):** `{res['poc']}`\n"
-        f"📊 **Value Area (VAL / VAH):** `{res['val']} - {res['vah']}`\n"
-        f"🧨 **Institutional Sweep:** `{res['sweep']}`\n"
-        f"🔥 **Quant Edge:** `+{res['edge']}%`\n"
         f"⏱️ Update: `{now.strftime('%H:%M:%S')}`\n"
         f"━━━━━━━━━━━━━━━━━━━━━━"
     )
 
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("⚔️ สแกนหาจุดเข้า M1 ถัดไป ⚔️", callback_data="next_signal"))
+    markup.add(InlineKeyboardButton("⚔️ สแกนหาจุดเข้าถัดไป (การันตีมีสัญญาณ) ⚔️", callback_data="next_signal"))
     
     try:
         bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
     except Exception as e:
-        print(f"[ERROR SENDING MESSAGE]: {e}")
+        logging.error(f"Error sending message: {e}")
 
 @bot.message_handler(commands=['start', 'run'])
 def handle_start(message):
     chat_id = message.chat.id
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("⚔️ สแกนหาจุดเข้า M1 ถัดไป ⚔️", callback_data="next_signal"))
+    markup.add(InlineKeyboardButton("⚔️ สแกนหาจุดเข้าถัดไป (การันตีมีสัญญาณ) ⚔️", callback_data="next_signal"))
     bot.reply_to(message, 
-        "👑 **TITAN v104.0 M1 Sniper พร้อมรบ!**\n"
-        "การ์ดคลีน กระชับ โฟกัสเฉพาะเครื่องมือทำกำไรระยะสั้น กดสแกนลุยโลด:", 
+        "👑 **TITAN v107.0 Force-Signal พร้อมรบ!**\n"
+        "กดปุ่มปุ๊บ บังคับคัดเลือกคู่ที่สัญญาณเด่นที่สุดมาพ่นการ์ดให้เทรดได้ทันทีทุกคลิก ลุยโลด:", 
         reply_markup=markup, 
         parse_mode="Markdown"
     )
@@ -141,16 +199,19 @@ def handle_start(message):
 @bot.callback_query_handler(func=lambda call: call.data == "next_signal")
 def handle_next_signal(call):
     try:
-        bot.answer_callback_query(call.id)
+        bot.answer_callback_query(call.id, text="⚡ กำลังคัดเลือกคู่ที่สัญญาณเด่นที่สุด...", show_alert=False)
     except Exception:
         pass
     
-    send_new_signal_card(call.message.chat.id)
+    send_real_signal_card(call.message.chat.id)
 
 if __name__ == "__main__":
-    print("🚀 TITAN v104.0 M1 Sniper Engine Running...")
+    logging.info("🚀 TITAN v107.0 Force-Signal Engine Running...")
     while True:
         try:
             bot.infinity_polling(timeout=10, long_polling_timeout=5)
         except Exception as e:
-            time.sleep(1)
+            logging.error(f"[POLLING ERROR CRASH]: {e}")
+            logging.error(traceback.format_exc())
+            time.sleep(2)
+        
