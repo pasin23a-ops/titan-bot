@@ -6,7 +6,8 @@ import time
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-BOT_TOKEN = "8316396699:AAHff4bp0RbvYJjx-eOhuUqr4kgD-MERj-c"
+# 🔑 โทรเคนใหม่ล่าสุดของนายที่อัปเดตแล้ว
+BOT_TOKEN = "8919259236:AAGOUrAxGr_FnjqEANxERHAdFvcnBeP5YCk"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 last_sent_symbol = {}
@@ -52,12 +53,10 @@ def fetch_kline(symbol, interval="1m", limit=60):
     return None
 
 def analyze_symbol_democratic(sym):
-    # 1. ดึงข้อมูลจริง M1
     df1 = fetch_kline(symbol=sym, interval="1m", limit=60)
     if df1 is None or len(df1) < 50:
         return None
 
-    # 2. ดึงข้อ 2 ของโค้ดปัจจุบัน: เทรนด์ระยะยาว M5 และ M15 จริง
     df5 = fetch_kline(symbol=sym, interval="5m", limit=30)
     df15 = fetch_kline(symbol=sym, interval="15m", limit=30)
     
@@ -71,7 +70,6 @@ def analyze_symbol_democratic(sym):
         m15_ema20 = df15['close'].ewm(span=20, adjust=False).mean()
         m15_trend = "UP" if df15['close'].iloc[-2] > m15_ema20.iloc[-2] else "DOWN"
 
-    # 3. คำนวณอินดิเคเตอร์จริง (PPO, RSI, Bollinger Bands)
     ema12 = df1['close'].ewm(span=12, adjust=False).mean()
     ema26 = df1['close'].ewm(span=26, adjust=False).mean()
     ppo_line = ((ema12 - ema26) / ema26) * 100
@@ -90,27 +88,21 @@ def analyze_symbol_democratic(sym):
     lower_band = sma20 - (std20 * 2)
     band_width = float((upper_band.iloc[-2] - lower_band.iloc[-2]) / sma20.iloc[-2])
 
-    # 4. ระบบประชาธิปไตย (Democratic Voting System - นับคะแนนเสียงจริงจากทุกเครื่องมือ)
     call_votes = 0
     put_votes = 0
 
-    # เสียงที่ 1: PPO Momentum
     if current_ppo > 0: call_votes += 1
     else: put_votes += 1
 
-    # เสียงที่ 2: RSI Zone
     if current_rsi < 45: call_votes += 1
     elif current_rsi > 55: put_votes += 1
 
-    # เสียงที่ 3: M5 Trend Confirmation
     if m5_trend == "UP": call_votes += 2
     elif m5_trend == "DOWN": put_votes += 2
 
-    # เสียงที่ 4: M15 Trend Confirmation (กรอบใหญ่สุด)
     if m15_trend == "UP": call_votes += 2
     elif m15_trend == "DOWN": put_votes += 2
 
-    # ตัดสินทิศทางจากเสียงข้างมาก (ประชาธิปไตยแท้จริง)
     if call_votes >= put_votes:
         direction = "CALL"
         majority_votes = call_votes
@@ -121,8 +113,6 @@ def analyze_symbol_democratic(sym):
         total_votes = call_votes + put_votes
 
     consensus_pct = round((majority_votes / max(total_votes, 1)) * 100, 1)
-
-    # คำนวณ Score จากผลโหวตและความกว้างของกรอบจริง
     base_score = (consensus_pct * 0.7) + (band_width * 300)
 
     return {
@@ -159,7 +149,6 @@ def generate_fast_signal(chat_id):
     success_count = len(valid_results)
 
     if not valid_results:
-        # หากดึงข้อมูลไม่ได้จริงๆ จะแจ้งเตือนตรงๆ ไม่ออกเลขมโนมั่วซั่ว
         try:
             bot.send_message(chat_id, "⚠️ กำลังหน่วงกับเซิร์ฟเวอร์ตลาดจริง กรุณากดขอสัญญาณใหม่อีกครั้งทันที", parse_mode="Markdown")
         except:
@@ -219,7 +208,7 @@ def handle_start(message):
     bot.reply_to(
         message, 
         "🚀 **TITAN v82.0 DEMOCRATIC ENGINE ACTIVATED** 🚀\n"
-        "รวมร่างระบบวิเคราะห์ M5/M15, ระบบโหวตประชาธิปไตยจากอินดิเคเตอร์จริง และตัดตัวเลขมโนออก 100% ลุยโลด:", 
+        "โทเคนใหม่เชื่อมต่อสำเร็จ! พร้อมลุยตลาดจริงยาวๆ ลุยโลด:", 
         reply_markup=markup,
         parse_mode="Markdown"
     )
