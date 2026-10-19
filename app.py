@@ -2,7 +2,6 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import datetime
 import random
-import threading
 import time
 
 # 🔑 โทเคนของนาย
@@ -104,76 +103,70 @@ def generate_god_tier_grandmaster_signal():
         "edge": edge
     }
 
-def send_new_signal_card_async(chat_id):
-    """ส่งการ์ดแบบแยก Thread ป้องกันหลักทำงานค้าง"""
+def send_new_signal_card(chat_id):
+    res = generate_god_tier_grandmaster_signal()
+    now = get_thai_time()
+    target_time_str = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M')
+    
+    is_buy = (res['direction'] == "CALL")
+    dir_emoji = "🟢 BUY (CALL) 🟢" if is_buy else "🔴 SELL (PUT) 🔴"
+
+    card_text = (
+        f"👑 **TITAN v101.0 GOD-TIER MASTER** 👑\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📰 🛡️ ตลาดปกติ (Instant Interactive Mode)\n"
+        f"🎯 **คู่เด่นสถาบัน OTC:** `{res['symbol_label']}`\n"
+        f"🗳️ **สภาโหวต 3 มิติ (MACD/BB/RSI/Stoch/EMA):** `[ขึ้น {res['up_votes']} : ลง {res['down_votes']}]` ({res['consensus']}%)\n"
+        f"⏱️ **เวลาเข้าออเดอร์:** `{target_time_str}` (M1)\n"
+        f"⚡ **ทิศทางฟันธง:** **{dir_emoji}**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🔱 **Smart Money Flow:** `{res['sm_flow']}`\n"
+        f"🌊 **Order Imbalance & Delta:** `{res['imbalance']}`\n"
+        f"🛡️ **Liquidity Wall:** `{res['wall']}` (กำแพงเจ้ามือ)\n"
+        f"🎯 **Volume Profile (POC):** `{res['poc']}`\n"
+        f"📊 **Value Area (VAL / VAH):** `{res['val']} - {res['vah']}`\n"
+        f"📐 **Order Block / FVG Zone:** `{res['fvg']}`\n"
+        f"🧨 **God Institutional Sweep:** `{res['sweep']}`\n"
+        f"📊 **Market Regime:** `{res['regime']}`\n"
+        f"🔥 **God-Tier Quant Edge:** `+{res['edge']}%` (Absolute Odds)\n"
+        f"⏱️ Update: `{now.strftime('%H:%M:%S')}`\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("⚔️ สแกนหาจุดเข้าคมกริบระดับพระเจ้า ⚔️", callback_data="next_signal"))
+    
     try:
-        res = generate_god_tier_grandmaster_signal()
-        now = get_thai_time()
-        target_time_str = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M')
-        
-        is_buy = (res['direction'] == "CALL")
-        dir_emoji = "🟢 BUY (CALL) 🟢" if is_buy else "🔴 SELL (PUT) 🔴"
-
-        card_text = (
-            f"👑 **TITAN v99.0 GOD-TIER PERFECTION** 👑\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📰 🛡️ ตลาดปกติ (ไร้ข่าวแรง / Speed Engine Active)\n"
-            f"🎯 **คู่เด่นสถาบัน OTC:** `{res['symbol_label']}`\n"
-            f"🗳️ **สภาโหวต 3 มิติ (MACD/BB/RSI/Stoch/EMA):** `[ขึ้น {res['up_votes']} : ลง {res['down_votes']}]` ({res['consensus']}%)\n"
-            f"⏱️ **เวลาเข้าออเดอร์:** `{target_time_str}` (M1)\n"
-            f"⚡ **ทิศทางฟันธง:** **{dir_emoji}**\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🔱 **Smart Money Flow:** `{res['sm_flow']}`\n"
-            f"🌊 **Order Imbalance & Delta:** `{res['imbalance']}`\n"
-            f"🛡️ **Liquidity Wall:** `{res['wall']}` (กำแพงเจ้ามือ)\n"
-            f"🎯 **Volume Profile (POC):** `{res['poc']}`\n"
-            f"📊 **Value Area (VAL / VAH):** `{res['val']} - {res['vah']}`\n"
-            f"📐 **Order Block / FVG Zone:** `{res['fvg']}`\n"
-            f"🧨 **God Institutional Sweep:** `{res['sweep']}`\n"
-            f"📊 **Market Regime:** `{res['regime']}`\n"
-            f"🔥 **God-Tier Quant Edge:** `+{res['edge']}%` (Absolute Odds)\n"
-            f"⏱️ Update: `{now.strftime('%H:%M:%S')}`\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━"
-        )
-
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("⚔️ สแกนหาจุดเข้าคมกริบระดับพระเจ้า ⚔️", callback_data="next_signal"))
-        
         bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
     except Exception as e:
-        print(f"[ASYNC SEND ERROR]: {e}")
+        print(f"[ERROR SENDING MESSAGE]: {e}")
 
 @bot.message_handler(commands=['start', 'run'])
 def handle_start(message):
     chat_id = message.chat.id
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("⚔️ ปลดล็อกพลัง God-Tier Perfection ⚔️", callback_data="next_signal"))
+    markup.add(InlineKeyboardButton("⚔️ สแกนหาจุดเข้าคมกริบระดับพระเจ้า ⚔️", callback_data="next_signal"))
     bot.reply_to(message, 
-        "👑 **TITAN v99.0 God-Tier Perfection พร้อมรบแล้วครับนาย!**\n"
-        "แก้ปัญหาปุ่มค้างและการตอบสนองถาวรแล้ว กดพ่นการ์ดใหม่รัวๆ ได้เลย:", 
+        "👑 **TITAN v101.0 พร้อมรบด้วยระบบปุ่มกดแล้วครับนาย!**\n"
+        "กดปุ่มด้านล่างเพื่อพ่นการ์ดสัญญาณใหม่ลงมาได้ทันที:", 
         reply_markup=markup, 
         parse_mode="Markdown"
     )
 
-@bot.callback_query_handler(func=lambda call: True)
+@bot.callback_query_handler(func=lambda call: call.data == "next_signal")
 def handle_next_signal(call):
-    # 1. ตอบรับปุ่มทันทีเพื่อความเร็วระดับมิลลิวินาที
+    # ⚡ ปลดล็อกปุ่มกดทันที ป้องกันปุ่มค้าง 100%
     try:
         bot.answer_callback_query(call.id)
     except Exception:
         pass
     
-    # 2. แยก Thread ในการประมวลผลและพิมพ์ข้อความ เพื่อไม่ให้เกิดปุ่มค้างเด็ดขาด
-    if call.data == "next_signal":
-        threading.Thread(target=send_new_signal_card_async, args=(call.message.chat.id,)).start()
+    send_new_signal_card(call.message.chat.id)
 
 if __name__ == "__main__":
-    print("🚀 TITAN v99.0 God-Tier Perfection Engine Running...")
-    
-    # ระบบวนลูปป้องกันการล่มถาวร (Crash-Proof Loop)
+    print("🚀 TITAN v101.0 Interactive Card Engine Running...")
     while True:
         try:
             bot.infinity_polling(timeout=10, long_polling_timeout=5)
         except Exception as e:
-            print(f"[RECOVERING FROM NETWORK ISSUE]: {e}")
-            time.sleep(2)
+            time.sleep(1)
