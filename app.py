@@ -5,8 +5,8 @@ import math
 import logging
 import requests
 import telebot
+import threading
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ==========================================
 # 1. SYSTEM CONFIGURATION & LOGGING
@@ -15,7 +15,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
-logger = logging.getLogger("TITAN_V81_ENGINE")
+logger = logging.getLogger("TITAN_INSTANT_THREAD_ENGINE")
 
 # 🔑 Credentials
 BOT_TOKEN = "8433798780:AAF7OGcXc_rRennz4Cwlht7YI5oamwZ6uJg"
@@ -57,22 +57,8 @@ def safe_float(value, default=0.0):
         return default
 
 # ==========================================
-# 4. QUANT & NEWS FILTER ENGINE
+# 4. QUANT INDICATORS (PURE MATH)
 # ==========================================
-def fetch_live_news_status():
-    """จำลองการเช็กสถานะข่าวเศรษฐกิจสดจากฐานข้อมูลหรือ API ภายนอกเพื่อกรองความผันผวน"""
-    try:
-        # เช็กความผันผวนเบื้องต้นจากความแรงของ Volume BTC ในแท่งปัจจุบัน
-        res = requests.get("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT", timeout=1.5)
-        if res.status_code == 200:
-            data = res.json()
-            price_change = abs(safe_float(data.get("priceChangePercent", 0)))
-            if price_change > 4.0:
-                return "⚡ High Impact News / High Volatility Filtered"
-    except Exception:
-        pass
-    return "🛡️ Normal Market / Stable News Filter"
-
 def calculate_ema(closes, span):
     if not closes: return 0.0
     multiplier = 2 / (span + 1)
@@ -125,32 +111,27 @@ def calculate_adx(highs, lows, closes, period=14):
     return round(min(max((avg_tr / p_range) * 250.0, 15.0), 85.0), 1)
 
 # ==========================================
-# 5. HIGH-SPEED REAL-TIME API FETCHER
+# 5. REAL-TIME API FETCHER
 # ==========================================
 def fetch_real_binance_data(symbol):
-    endpoints = [
-        f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=40",
-        f"https://api1.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=40",
-        f"https://api2.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=40"
-    ]
-    for url in endpoints:
-        try:
-            res = requests.get(url, timeout=1.5)
-            if res.status_code == 200:
-                raw_data = res.json()
-                if isinstance(raw_data, list) and len(raw_data) >= 15:
-                    return {
-                        "opens": [safe_float(row[1]) for row in raw_data],
-                        "highs": [safe_float(row[2]) for row in raw_data],
-                        "lows": [safe_float(row[3]) for row in raw_data],
-                        "closes": [safe_float(row[4]) for row in raw_data]
-                    }
-        except Exception:
-            continue
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=40"
+    try:
+        res = requests.get(url, timeout=1.2)
+        if res.status_code == 200:
+            raw_data = res.json()
+            if isinstance(raw_data, list) and len(raw_data) >= 15:
+                return {
+                    "opens": [safe_float(row[1]) for row in raw_data],
+                    "highs": [safe_float(row[2]) for row in raw_data],
+                    "lows": [safe_float(row[3]) for row in raw_data],
+                    "closes": [safe_float(row[4]) for row in raw_data]
+                }
+    except Exception:
+        pass
     return None
 
 # ==========================================
-# 6. QUANT ANALYSIS (V81 ULTIMATE ENGINE)
+# 6. QUANT ANALYSIS & BACKGROUND SENDER
 # ==========================================
 def analyze_symbol(symbol):
     data = fetch_real_binance_data(symbol)
@@ -165,7 +146,6 @@ def analyze_symbol(symbol):
     adx = calculate_adx(highs, lows, closes, 14)
     ema5 = calculate_ema(closes, 5)
     ema13 = calculate_ema(closes, 13)
-    macd_line, macd_hist = calculate_macd(closes)
 
     is_green = (last_close >= last_open)
     if is_green and (ema5 >= ema13):
@@ -190,18 +170,16 @@ def analyze_symbol(symbol):
         "strength": strength
     }
 
-def generate_signal(chat_id):
+def process_and_send_signal(chat_id):
     try:
         results = []
-        with ThreadPoolExecutor(max_workers=15) as executor:
-            futures = {executor.submit(analyze_symbol, sym): sym for sym in EXACT_8X_SYMBOLS.keys()}
-            for future in as_completed(futures):
-                try:
-                    res = future.result()
-                    if res: results.append(res)
-                except Exception:
-                    continue
+        # วนลูปเช็กทีละคู่แบบเร็วที่สุดเพื่อหาคู่ที่ดีที่สุด
+        for sym in EXACT_8X_SYMBOLS.keys():
+            res = analyze_symbol(sym)
+            if res:
+                results.append(res)
 
+        # ถ้าสแกนไม่ทัน ดึง BTC สดๆ ตรงๆ ทันที
         if not results:
             btc_res = analyze_symbol("BTCUSDT")
             if btc_res:
@@ -213,36 +191,32 @@ def generate_signal(chat_id):
         best = max(results, key=lambda x: x["strength"])
         label = EXACT_8X_SYMBOLS.get(best["symbol"], best["symbol"])
         entry_time = (get_thai_time() + datetime.timedelta(minutes=1)).strftime('%H:%M')
-        news_status = fetch_live_news_status()
         
         is_buy = (best["direction"] == "CALL")
         dir_badge = "🟢 BUY (CALL) 🟢" if is_buy else "🔴 SELL (PUT) 🔴"
 
         card_text = (
-            f"👑 **TITAN V81 ULTIMATE QUANT ENGINE** 👑\n"
+            f"👑 **TITAN THREAD ENGINE** 👑\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"📌 **ASSET:** `{label}`\n"
             f"💵 **REAL LIVE PRICE:** `{best['close']}`\n"
             f"⏱️ **EXECUTION TIME:** `{entry_time}` (M1 Frame)\n\n"
             f"🎯 **TRADE DIRECTION:** **{dir_badge}**\n"
             f"🔥 **ALGO PROBABILITY:** `{best['strength']}%`\n"
-            f"📰 **NEWS FILTER:** `{news_status}`\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"📊 **METRICS:**\n"
             f"• **Live RSI:** `{best['rsi']}` | **ADX:** `{best['adx']}`\n"
             f"• **Stoch-RSI:** `{best['stoch_rsi']}`\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"💯 *ราคาจริงจากตลาดสด 100% พร้อมระบบกรองข่าวสาร*"
+            f"💯 *ข้อมูลจริงจากตลาดสด 100%*"
         )
 
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("🔄 กดขอสัญญาณสดทันใจ", callback_data="get_signal"))
         
-        bot.send_message(CHAT_ID, card_text, reply_markup=markup, parse_mode="Markdown")
-        logger.info("V81 Signal sent successfully.")
-
+        bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
     except Exception as e:
-        logger.error(f"Error in generate_signal: {e}")
+        logger.error(f"Error in background worker: {e}")
 
 # ==========================================
 # 7. TELEGRAM HANDLERS
@@ -251,19 +225,22 @@ def generate_signal(chat_id):
 def send_welcome(message):
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("🔄 กดขอสัญญาณสดทันใจ", callback_data="get_signal"))
-    bot.reply_to(message, "🚀 **TITAN V81 พร้อมรบ!** กดปุ่มด้านล่างเพื่อรับสัญญาณ:", reply_markup=markup, parse_mode="Markdown")
+    bot.reply_to(message, "🚀 **TITAN พร้อมรบ!** กดปุ่มด้านล่าง:", reply_markup=markup, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
     if call.data == "get_signal":
         try:
-            bot.answer_callback_query(call.id)
+            # ตอบรับ Telegram ทันทีในเสี้ยววิ ป้องกัน Timeout
+            bot.answer_callback_query(call.id, "⚡ กำลังประมวลผล...")
         except Exception:
             pass
-        generate_signal(call.message.chat.id)
+        
+        # รันการดึงข้อมูลแยกไปอีก Thread ทันทีเพื่อให้ปุ่มไม่ค้าง
+        threading.Thread(target=process_and_send_signal, args=(call.message.chat.id,)).start()
 
 if __name__ == "__main__":
-    logger.info("Titan V81 Bot is running...")
+    logger.info("Titan Thread Bot is running...")
     try:
         bot.remove_webhook()
         time.sleep(1)
