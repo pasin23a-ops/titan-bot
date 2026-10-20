@@ -15,7 +15,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
-logger = logging.getLogger("TITAN_DIRECT_ENGINE")
+logger = logging.getLogger("TITAN_FINAL_ENGINE")
 
 # 🔑 Credentials
 BOT_TOKEN = "8433798780:AAF7OGcXc_rRennz4Cwlht7YI5oamwZ6uJg"
@@ -204,7 +204,7 @@ def generate_signal(chat_id):
         dir_badge = "🟢 BUY (CALL) 🟢" if is_buy else "🔴 SELL (PUT) 🔴"
 
         card_text = (
-            f"👑 **TITAN DIRECT ENGINE** 👑\n"
+            f"👑 **TITAN FINAL ENGINE** 👑\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"📌 **ASSET:** `{label}`\n"
             f"💵 **REAL LIVE PRICE:** `{best['close']}`\n"
@@ -223,9 +223,8 @@ def generate_signal(chat_id):
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("🔄 กดขอสัญญาณสดทันใจ", callback_data="get_signal"))
         
-        # บังคับส่งตรงผ่าน Chat ID หลักทันที ป้องกันเคส Callback หลุด
         bot.send_message(CHAT_ID, card_text, reply_markup=markup, parse_mode="Markdown")
-        logger.info("Signal sent successfully to CHAT_ID.")
+        logger.info("Signal sent successfully.")
 
     except Exception as e:
         logger.error(f"Error in generate_signal: {e}")
@@ -237,7 +236,7 @@ def generate_signal(chat_id):
 def send_welcome(message):
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("🔄 กดขอสัญญาณสดทันใจ", callback_data="get_signal"))
-    bot.reply_to(message, "🚀 **TITAN DIRECT ENGINE พร้อมรบแล้วครับนาย!** 🚀\nกดปุ่มด้านล่างเพื่อรับสัญญาณคู่ที่ดีที่สุด:", reply_markup=markup, parse_mode="Markdown")
+    bot.reply_to(message, "🚀 **TITAN FINAL ENGINE พร้อมรบแล้วครับนาย!** 🚀\nกดปุ่มด้านล่างเพื่อรับสัญญาณคู่ที่ดีที่สุด:", reply_markup=markup, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
@@ -250,7 +249,7 @@ def handle_callback(call):
         generate_signal(call.message.chat.id)
 
 if __name__ == "__main__":
-    logger.info("Titan Direct Bot is running...")
+    logger.info("Titan Final Bot is running...")
     while True:
         try:
             bot.infinity_polling(timeout=25, long_polling_timeout=15)
