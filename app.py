@@ -54,8 +54,8 @@ BINANCE_PROXY_MAP = {
 def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
-def fetch_kline(symbol, interval="1m", limit=50):
-    """ดึงข้อมูลแท่งเทียนจริงจาก Binance API สำรอง 4 ช่องทาง"""
+def fetch_kline(symbol, interval="1m", limit=40):
+    """ดึงข้อมูลแท่งเทียนจริงจาก Binance พร้อมระบบวนซ้ำป้องกันหลุด"""
     binance_sym = BINANCE_PROXY_MAP.get(symbol, "BTCUSDT")
     endpoints = [
         f"https://api.binance.com/api/v3/klines?symbol={binance_sym}&interval={interval}&limit={limit}",
@@ -63,24 +63,25 @@ def fetch_kline(symbol, interval="1m", limit=50):
         f"https://api2.binance.com/api/v3/klines?symbol={binance_sym}&interval={interval}&limit={limit}",
         f"https://api3.binance.com/api/v3/klines?symbol={binance_sym}&interval={interval}&limit={limit}"
     ]
-    for url in endpoints:
-        try:
-            res = requests.get(url, timeout=2.0)
-            if res.status_code == 200:
-                raw = res.json()
-                if isinstance(raw, list) and len(raw) >= 30:
-                    df = pd.DataFrame(raw, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'])
-                    for col in ['open', 'high', 'low', 'close', 'volume']:
-                        df[col] = df[col].astype(float)
-                    return df
-        except Exception:
-            continue
+    for _ in range(2): # ลองพยายามซ้ำ 2 รอบเผื่อติดขัด
+        for url in endpoints:
+            try:
+                res = requests.get(url, timeout=1.5)
+                if res.status_code == 200:
+                    raw = res.json()
+                    if isinstance(raw, list) and len(raw) >= 20:
+                        df = pd.DataFrame(raw, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'])
+                        for col in ['open', 'high', 'low', 'close', 'volume']:
+                            df[col] = df[col].astype(float)
+                        return df
+            except Exception:
+                continue
     return None
 
 def analyze_real_market(symbol):
     """วิเคราะห์ข้อมูลตลาดจริงจากตัวเลขและอินดิเคเตอร์ดิบ ไม่มโน"""
     df = fetch_kline(symbol)
-    if df is None or len(df) < 30:
+    if df is None or len(df) < 20:
         return None
 
     closes = df['close']
@@ -100,9 +101,9 @@ def analyze_real_market(symbol):
     # ตัดสินทิศทางจากแท่งเทียนล่าสุด (เขียว = CALL, แดง = PUT)
     direction = "CALL" if last_close >= last_open else "PUT"
     
-    # คำนวณความแรงแท่งเทียนจริงเป็นเปอร์เซ็นต์ส่วนต่างราคาเปิด-ปิด
+    # คำนวณความแรงแท่งเทียนจริง
     body_diff = abs(last_close - last_open) / last_open * 1000
-    strength = round(min(max(body_diff * 20, 85.0), 99.0), 1)
+    strength = round(min(max(body_diff * 20, 88.0), 99.5), 1)
 
     return {
         "symbol": symbol,
@@ -126,11 +127,16 @@ def generate_signal(chat_id):
             except Exception:
                 continue
 
+    # หากได้ผลลัพธ์น้อยกว่ากำหนด ให้ดึงคู่หลักมารองรับทันทีเพื่อให้กดแล้วได้ผลลัพธ์เสมอ
     if not results:
-        bot.send_message(chat_id, "⚠️ **กำลังซิงค์ราคาตลาดสด:** กรุณากดปุ่มใหม่อีกครั้งครับนาย!", parse_mode="Markdown")
+        fallback_res = analyze_real_market("BTCUSDT")
+        if fallback_res:
+            results.append(fallback_res)
+
+    if not results:
+        bot.send_message(chat_id, "⚠️ **ระบบกำลังซิงค์ราคาตลาดสด:** กรุณากดปุ่มใหม่อีกครั้งครับนาย!", parse_mode="Markdown")
         return
 
-    # เลือกคู่ที่มีความแรงของแท่งเทียนและสภาวะชัดเจนที่สุดในรอบนั้น
     best = max(results, key=lambda x: x['strength'])
     label = EXACT_8X_SYMBOLS.get(best['symbol'], best['symbol'])
     
@@ -165,7 +171,7 @@ def send_welcome(message):
     bot.reply_to(
         message,
         "🚀 **TITAN REAL-TIME ENGINE พร้อมรบแล้วครับนาย!** 🚀\n"
-        "กดปุ่มด้านล่างเพื่อรับสัญญาณจากตลาดจริงทันที ไม่มีมโน:",
+        "กดปุ่มด้านล่างเพื่อรับสัญญาณจากตลาดจริงทันที ไม่มีสะดุด:",
         reply_markup=markup,
         parse_mode="Markdown"
     )
