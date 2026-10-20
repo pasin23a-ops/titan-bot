@@ -5,13 +5,19 @@ import datetime
 import time
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
+from flask import Flask, request
 
-# 🔑 โทเคนของนาย
+# 🔑 ตั้งค่า Bot Token และ Telegram Chat ID
 BOT_TOKEN = "8919259236:AAGOUrAxGr_FnjqEANxERHAdFvcnBeP5YCk"
+CHAT_ID = "8644030650"
+
 bot = telebot.TeleBot(BOT_TOKEN)
+app = Flask(__name__)
 
 last_sent_symbol = {}
 
+# รายชื่อ 15 สินทรัพย์ตรงตามกระดาน 8X
 EXACT_8X_SYMBOLS = {
     "BTCUSDT": "BTC/USD (Proxy/Binance)",
     "ETHUSDT": "ETH/USD (Proxy/Binance)",
@@ -34,7 +40,7 @@ def get_thai_time():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
 def fetch_kline(symbol, interval="1m", limit=60):
-    """ดึงราคาจริงจาก Binance - ถ้าล้มเหลวคืนค่า None (ดึงได้เท่าไหร่เอาเท่านั้น)"""
+    """ดึงข้อมูลราคาจริงจาก Binance API - ไม่มีสุ่มราคาปลอม"""
     binance_symbol = symbol.replace("_OTC", "") 
     endpoints = [
         f"https://api.binance.com/api/v3/klines?symbol={binance_symbol}&interval={interval}&limit={limit}",
@@ -56,7 +62,7 @@ def fetch_kline(symbol, interval="1m", limit=60):
     return None
 
 def calculate_sar(df, af_start=0.12, af_max=0.2):
-    """คำนวณ Parabolic SAR (จุดไข่ปลา) จริง"""
+    """คำนวณ Parabolic SAR (0.12, 0.2) จริง"""
     highs = df['high'].values
     lows = df['low'].values
     length = len(df)
@@ -95,7 +101,7 @@ def calculate_sar(df, af_start=0.12, af_max=0.2):
     return sar
 
 def analyze_symbol_master(sym):
-    # 1. ดึงข้อมูล M1 และ M5 จริง (ไม่มี M15)
+    """คำนวณอินดิเคเตอร์ปรมาจารย์ครบทุกด่าน (ไม่มี M15)"""
     df1 = fetch_kline(symbol=sym, interval="1m", limit=60)
     if df1 is None or len(df1) < 40:
         return None
@@ -111,27 +117,27 @@ def analyze_symbol_master(sym):
     lows = df1['low']
     volumes = df1['volume']
 
-    # 2. คำนวณ MACD (4, 9, 4)
+    # 1. MACD (4, 9, 4)
     ema4 = closes.ewm(span=4, adjust=False).mean()
     ema9 = closes.ewm(span=9, adjust=False).mean()
     macd_line = ema4 - ema9
     signal_line = macd_line.ewm(span=4, adjust=False).mean()
     macd_hist = macd_line - signal_line
 
-    # 3. คำนวณ Keltner Channels (20, 2)
+    # 2. Keltner Channels (20, 2)
     ema20 = closes.ewm(span=20, adjust=False).mean()
     tr = pd.concat([highs - lows, (highs - closes.shift()).abs(), (lows - closes.shift()).abs()], axis=1).max(axis=1)
     atr20 = tr.rolling(20).mean()
     kc_upper = ema20 + (2 * atr20)
     kc_lower = ema20 - (2 * atr20)
 
-    # 4. คำนวณ Parabolic SAR (0.12, 0.2)
+    # 3. Parabolic SAR (0.12, 0.2)
     sar_values = calculate_sar(df1, af_start=0.12, af_max=0.2)
     last_close = closes.iloc[-2]
     last_sar = sar_values[-2]
     sar_trend = "UP" if last_close > last_sar else "DOWN"
 
-    # 5. คำนวณ PPO & Wilder's RSI
+    # 4. PPO & RSI
     ema12 = closes.ewm(span=12, adjust=False).mean()
     ema26 = closes.ewm(span=26, adjust=False).mean()
     ppo_line = ((ema12 - ema26) / ema26) * 100
@@ -144,36 +150,32 @@ def analyze_symbol_master(sym):
     rsi = 100 - (100 / (1 + rs))
     current_rsi = float(rsi.iloc[-2])
 
-    # 6. วิเคราะห์ข่าวจริงจาก Volume & Volatility Impact
+    # 5. ข่าวจริง / ความผันผวนจาก Volume Spike
     vol_mean = volumes.iloc[-20:-2].mean()
     cur_vol = volumes.iloc[-2]
     news_impact = "NORMAL"
     if cur_vol > (vol_mean * 2.2):
         news_impact = "HIGH VOLATILITY (NEWS)"
 
-    # 7. ประชาธิปไตยโหวตจากด่านกรองปรมาจารย์ทั้งหมด
+    # 6. ระบบโหวตประชาธิปไตย
     call_votes = 0
     put_votes = 0
 
-    # โหวตที่ 1: Parabolic SAR (0.12/0.2)
     if sar_trend == "UP": call_votes += 2
     else: put_votes += 2
 
-    # โหวตที่ 2: MACD 494
     if macd_hist.iloc[-2] > 0: call_votes += 1.5
     else: put_votes += 1.5
 
-    # โหวตที่ 3: Keltner Channels
     if last_close > kc_upper.iloc[-2]: call_votes += 1.5
     elif last_close < kc_lower.iloc[-2]: put_votes += 1.5
 
-    # โหวตที่ 4: PPO + RSI
     if current_ppo > 0: call_votes += 1
     else: put_votes += 1
+    
     if current_rsi < 45: call_votes += 1
     elif current_rsi > 55: put_votes += 1
 
-    # โหวตที่ 5: M5 Trend Filter
     if m5_trend == "UP": call_votes += 2
     elif m5_trend == "DOWN": put_votes += 2
 
@@ -203,6 +205,7 @@ def analyze_symbol_master(sym):
     }
 
 def generate_fast_signal(chat_id):
+    """สแกนหาคู่ที่ดีที่สุดด่วนเมื่อกดปุ่ม"""
     symbol_keys = list(EXACT_8X_SYMBOLS.keys())
     total_symbols = len(symbol_keys)
     valid_results = []
@@ -224,9 +227,9 @@ def generate_fast_signal(chat_id):
 
     if not valid_results:
         try:
-            bot.send_message(chat_id, "⚠️ ไม่สามารถดึงราคาจริงจากกระดานได้ในเสี้ยววินาทีนี้ กรุณากดขอสัญญาณใหม่อีกครั้งทันทีครับ", parse_mode="Markdown")
-        except Exception as e:
-            print(f"Error sending timeout warning: {e}")
+            bot.send_message(chat_id, "⚠️ ไม่สามารถดึงราคาจริงได้ในขณะนี้ กรุณากดขอสัญญาณใหม่อีกครั้งครับ", parse_mode="Markdown")
+        except Exception:
+            pass
         return
 
     last_sym = last_sent_symbol.get(chat_id, "")
@@ -235,7 +238,6 @@ def generate_fast_signal(chat_id):
         filtered_results = valid_results
 
     best_res = max(filtered_results, key=lambda x: x['score'])
-    
     last_sent_symbol[chat_id] = best_res['symbol']
     label = EXACT_8X_SYMBOLS.get(best_res['symbol'], best_res['symbol'])
     
@@ -251,17 +253,17 @@ def generate_fast_signal(chat_id):
     sar_disp = "🟢 ไข่ปลาหนุนขึ้น" if best_res['sar_trend'] == "UP" else "🔴 ไข่ปลากดลง"
 
     card_text = (
-        f"👑 **TITAN v85.0 MASTER QUANT REAL-DATA** 👑\n"
+        f"👑 **TITAN v85.0 MASTER QUANT** 👑\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 **สถานะระบบ:** `ดึงข้อมูลจริง {success_count}/{total_symbols} สำเร็จ`\n"
         f"🎯 **คู่ที่ถูกเลือก:** `{label}`\n"
         f"🗳️ **ประชาธิปไตยโหวต:** `[ขึ้น {best_res['call_votes']} : ลง {best_res['put_votes']}]` ({best_res['consensus']}%)\n"
-        f"🌐 **เทรนด์ M5:** `{trend_m5_disp}` | **SAR (0.12/0.2):** `{sar_disp}`\n"
+        f"🌐 **เทรนด์ M5:** `{trend_m5_disp}` | **SAR:** `{sar_disp}`\n"
         f"📊 **PPO / RSI:** `{best_res['ppo']:.2f} / {best_res['rsi']}`\n"
         f"📰 **สภาวะข่าวจริง:** `{best_res['news_impact']}`\n"
         f"⏱️ **เวลาเป้าหมายอ้างอิง:** `{target_time_str}` (M1)\n\n"
         f"🔥 **ทิศทางคำสั่ง:** **{dir_emoji}**\n\n"
-        f"⭐ **Master Confluence Score:** `{best_res['score']}`\n"
+        f"⭐ **Master Score:** `{best_res['score']}`\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💯 *ข้อมูลจริงจาก Binance 100% ไร้ตัวเลขมโน*"
     )
@@ -279,11 +281,11 @@ def generate_fast_signal(chat_id):
 def handle_start(message):
     chat_id = message.chat.id
     markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(InlineKeyboardButton("🔄 กดเพื่อสแกนรอบแรก (v85.0)", callback_data="request_next_signal"))
+    markup.add(InlineKeyboardButton("🔄 กดเพื่อสแกนสัญญาณด่วน", callback_data="request_next_signal"))
     bot.reply_to(
         message, 
         "🚀 **TITAN v85.0 MASTER QUANT ACTIVATED** 🚀\n"
-        "รวมร่างเครื่องมือปรมาจารย์ (Keltner, MACD 494, SAR 0.12/0.2) + ข้อมูลจริง 100% ไร้ M15 กดลื่นๆ ได้เลยครับนาย:", 
+        "พร้อมรับสัญญาณสแกนด่วน และสแตนด์บายรับ Alert จาก TradingView แล้วครับนาย:", 
         reply_markup=markup,
         parse_mode="Markdown"
     )
@@ -292,15 +294,33 @@ def handle_start(message):
 def handle_callbacks(call):
     chat_id = call.message.chat.id
     if call.data == "do_nothing":
-        bot.answer_callback_query(call.id, "⚡ v85.0 Active")
+        bot.answer_callback_query(call.id, "⚡ Active")
         return
     if call.data == "request_next_signal":
         bot.answer_callback_query(call.id, "⚡ กำลังสแกนข้อมูลจริง...")
         generate_fast_signal(chat_id)
         return
 
-while True:
+# 🌐 Webhook รับข้อมูลจาก TradingView ส่งตรงเข้า Telegram Chat ID 8644030650
+@app.route('/', methods=['GET'])
+def health_check():
+    return "TITAN v85.0 Webhook Server is Live!", 200
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
     try:
-        bot.polling(none_stop=True, interval=0, timeout=20)
+        data = request.json or request.data.decode('utf-8')
+        text_message = f"🚨 **TRADINGVIEW ALERT MATCHED** 🚨\n\n{data}" if isinstance(data, str) else f"🚨 **TRADINGVIEW ALERT MATCHED** 🚨\n\n`{data}`"
+        
+        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
+            "chat_id": CHAT_ID,
+            "text": text_message,
+            "parse_mode": "Markdown"
+        })
+        return "OK", 200
     except Exception as e:
-        time.sleep(3)
+        return str(e), 400
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
