@@ -1,5 +1,3 @@
-pandas
 pyTelegramBotAPI
+pandas
 requests
-Flask
-gunicorn
