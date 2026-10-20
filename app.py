@@ -17,8 +17,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("TITAN_PURE_ENGINE")
 
-# Credentials
-BOT_TOKEN = "8919259236:AAGOUrAxGr_FnjqEANxERHAdFvcnBeP5YCk"
+# 🔑 Credentials (อัปเดต Bot Token ใหม่ของนายเรียบร้อย)
+BOT_TOKEN = "8433798780:AAF7OGcXc_rRennz4Cwlht7YI5oamwZ6uJg"
 CHAT_ID = "8644030650"
 
 bot = telebot.TeleBot(BOT_TOKEN)
