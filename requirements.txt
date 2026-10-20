@@ -1,4 +1,5 @@
-pyTelegramBotAPI
 pandas
-numpy
+pyTelegramBotAPI
 requests
+Flask
+gunicorn
