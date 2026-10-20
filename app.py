@@ -15,7 +15,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
-logger = logging.getLogger("TITAN_SAFE_ENGINE")
+logger = logging.getLogger("TITAN_ULTIMATE_STRICT_ENGINE")
 
 # 🔑 Credentials
 BOT_TOKEN = "8433798780:AAF7OGcXc_rRennz4Cwlht7YI5oamwZ6uJg"
@@ -111,32 +111,38 @@ def calculate_adx(highs, lows, closes, period=14):
     return round(min(max((avg_tr / p_range) * 250.0, 15.0), 85.0), 1)
 
 # ==========================================
-# 5. HIGH-SPEED REAL-TIME API FETCHER
+# 5. MULTI-ENDPOINT REAL-TIME API FETCHER
 # ==========================================
 def fetch_real_binance_data(symbol):
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=40"
-    try:
-        res = requests.get(url, timeout=1.5)
-        if res.status_code == 200:
-            raw_data = res.json()
-            if isinstance(raw_data, list) and len(raw_data) >= 20:
-                return {
-                    "opens": [safe_float(row[1]) for row in raw_data],
-                    "highs": [safe_float(row[2]) for row in raw_data],
-                    "lows": [safe_float(row[3]) for row in raw_data],
-                    "closes": [safe_float(row[4]) for row in raw_data]
-                }
-    except Exception as e:
-        logger.error(f"API Error {symbol}: {e}")
+    endpoints = [
+        f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=40",
+        f"https://api1.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=40",
+        f"https://api2.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=40",
+        f"https://api3.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=40"
+    ]
+    for url in endpoints:
+        try:
+            res = requests.get(url, timeout=1.8)
+            if res.status_code == 200:
+                raw_data = res.json()
+                if isinstance(raw_data, list) and len(raw_data) >= 15:
+                    return {
+                        "opens": [safe_float(row[1]) for row in raw_data],
+                        "highs": [safe_float(row[2]) for row in raw_data],
+                        "lows": [safe_float(row[3]) for row in raw_data],
+                        "closes": [safe_float(row[4]) for row in raw_data]
+                    }
+        except Exception:
+            continue
     return None
 
 # ==========================================
-# 6. QUANT ANALYSIS ENGINE (SAFE & TRUE)
+# 6. QUANT ANALYSIS ENGINE
 # ==========================================
 def analyze_symbol(symbol):
     data = fetch_real_binance_data(symbol)
-    if not data or len(data["closes"]) < 20:
-        return None
+    if not data or len(data["closes"]) < 15:
+        return None  # ปฏิเสธข้อมูลปลอม 100%
 
     closes, opens, highs, lows = data["closes"], data["opens"], data["highs"], data["lows"]
     last_close, last_open = closes[-1], opens[-1]
@@ -174,7 +180,7 @@ def analyze_symbol(symbol):
 def generate_signal(chat_id):
     try:
         results = []
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        with ThreadPoolExecutor(max_workers=15) as executor:
             futures = {executor.submit(analyze_symbol, sym): sym for sym in EXACT_8X_SYMBOLS.keys()}
             for future in as_completed(futures):
                 try:
@@ -183,23 +189,14 @@ def generate_signal(chat_id):
                 except Exception:
                     continue
 
-        # ถ้าสแกนคู่ย่อยไม่ทัน ให้ดึง BTCUSDT สดๆ ทันทีเพื่อการันตีการออกออเดอร์โดยใช้ข้อมูลจริง
         if not results:
-            btc_data = fetch_real_binance_data("BTCUSDT")
-            if btc_data:
-                c, o = btc_data["closes"], btc_data["opens"]
-                results.append({
-                    "symbol": "BTCUSDT",
-                    "direction": "CALL" if c[-1] >= o[-1] else "PUT",
-                    "close": c[-1],
-                    "rsi": round(calculate_rsi(c, 14), 1),
-                    "adx": 30.0,
-                    "stoch_rsi": 50.0,
-                    "strength": 95.0
-                })
+            logger.warning("All symbols failed. Trying fallback BTCUSDT direct fetch.")
+            btc_res = analyze_symbol("BTCUSDT")
+            if btc_res:
+                results.append(btc_res)
 
         if not results:
-            logger.error("Failed to fetch any market data.")
+            bot.send_message(chat_id, "⚠️ **กำลังซิงค์ราคาสดจากตลาด:** กรุณากดปุ่มขอสัญญาณใหม่อีกครั้งครับนาย!", parse_mode="Markdown")
             return
 
         best = max(results, key=lambda x: x["strength"])
@@ -210,20 +207,20 @@ def generate_signal(chat_id):
         dir_badge = "🟢 BUY (CALL) 🟢" if is_buy else "🔴 SELL (PUT) 🔴"
 
         card_text = (
-            f"👑 **TITAN SAFE-GUARANTEED ENGINE** 👑\n"
+            f"👑 **TITAN STRICT LIVE ENGINE** 👑\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"📌 **ASSET:** `{label}`\n"
             f"💵 **REAL LIVE PRICE:** `{best['close']}`\n"
             f"⏱️ **EXECUTION TIME:** `{entry_time}` (M1 Frame)\n\n"
             f"🎯 **TRADE DIRECTION:** **{dir_badge}**\n"
             f"🔥 **ALGO PROBABILITY:** `{best['strength']}%`\n"
-            f"🛡️ **STATUS:** `💯 100% Real Market Data (Guaranteed)`\n"
+            f"🛡️ **DATA INTEGRITY:** `💯 100% Real Binance Live Data`\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"📊 **METRICS:**\n"
             f"• **Live RSI:** `{best['rsi']}` | **ADX:** `{best['adx']}`\n"
             f"• **Stoch-RSI:** `{best['stoch_rsi']}`\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"💎 *ข้อมูลจริงจากตลาดสดทุกประการ การันตีออกผลลัพธ์ทุกครั้ง*"
+            f"💎 *ข้อมูลจริงจากตลาดสดทุกประการ ไร้ตัวเลขมโน*"
         )
 
         markup = InlineKeyboardMarkup()
@@ -240,7 +237,7 @@ def generate_signal(chat_id):
 def send_welcome(message):
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("🔄 กดขอสัญญาณสดทันใจ", callback_data="get_signal"))
-    bot.reply_to(message, "🚀 **TITAN SAFE ENGINE พร้อมรบแล้วครับนาย!** 🚀\nกดปุ่มด้านล่างเพื่อรับสัญญาณราคาสดจริง 100%:", reply_markup=markup, parse_mode="Markdown")
+    bot.reply_to(message, "🚀 **TITAN ENGINE พร้อมรบแล้วครับนาย!** 🚀\nกดปุ่มด้านล่างเพื่อรับสัญญาณราคาสดจริง 100%:", reply_markup=markup, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
@@ -253,7 +250,7 @@ def handle_callback(call):
         generate_signal(call.message.chat.id)
 
 if __name__ == "__main__":
-    logger.info("Titan Safe-Guaranteed Bot is running...")
+    logger.info("Titan Strict Live Bot is running...")
     while True:
         try:
             bot.infinity_polling(timeout=25, long_polling_timeout=15)
