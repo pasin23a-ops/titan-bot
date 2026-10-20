@@ -15,7 +15,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
-logger = logging.getLogger("TITAN_FINAL_ENGINE")
+logger = logging.getLogger("TITAN_WORKING_ENGINE")
 
 # 🔑 Credentials
 BOT_TOKEN = "8433798780:AAF7OGcXc_rRennz4Cwlht7YI5oamwZ6uJg"
@@ -114,25 +114,20 @@ def calculate_adx(highs, lows, closes, period=14):
 # 5. HIGH-SPEED REAL-TIME API FETCHER
 # ==========================================
 def fetch_real_binance_data(symbol):
-    endpoints = [
-        f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=40",
-        f"https://api1.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=40",
-        f"https://api2.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=40"
-    ]
-    for url in endpoints:
-        try:
-            res = requests.get(url, timeout=1.5)
-            if res.status_code == 200:
-                raw_data = res.json()
-                if isinstance(raw_data, list) and len(raw_data) >= 15:
-                    return {
-                        "opens": [safe_float(row[1]) for row in raw_data],
-                        "highs": [safe_float(row[2]) for row in raw_data],
-                        "lows": [safe_float(row[3]) for row in raw_data],
-                        "closes": [safe_float(row[4]) for row in raw_data]
-                    }
-        except Exception:
-            continue
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=40"
+    try:
+        res = requests.get(url, timeout=1.8)
+        if res.status_code == 200:
+            raw_data = res.json()
+            if isinstance(raw_data, list) and len(raw_data) >= 15:
+                return {
+                    "opens": [safe_float(row[1]) for row in raw_data],
+                    "highs": [safe_float(row[2]) for row in raw_data],
+                    "lows": [safe_float(row[3]) for row in raw_data],
+                    "closes": [safe_float(row[4]) for row in raw_data]
+                }
+    except Exception:
+        pass
     return None
 
 # ==========================================
@@ -204,26 +199,25 @@ def generate_signal(chat_id):
         dir_badge = "🟢 BUY (CALL) 🟢" if is_buy else "🔴 SELL (PUT) 🔴"
 
         card_text = (
-            f"👑 **TITAN FINAL ENGINE** 👑\n"
+            f"👑 **TITAN ENGINE** 👑\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"📌 **ASSET:** `{label}`\n"
             f"💵 **REAL LIVE PRICE:** `{best['close']}`\n"
             f"⏱️ **EXECUTION TIME:** `{entry_time}` (M1 Frame)\n\n"
             f"🎯 **TRADE DIRECTION:** **{dir_badge}**\n"
             f"🔥 **ALGO PROBABILITY:** `{best['strength']}%`\n"
-            f"🛡️ **STATUS:** `💯 Best Asset Real-Time Executed`\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"📊 **METRICS:**\n"
             f"• **Live RSI:** `{best['rsi']}` | **ADX:** `{best['adx']}`\n"
             f"• **Stoch-RSI:** `{best['stoch_rsi']}`\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"💎 *ข้อมูลจริงจากตลาดสด 100% ไร้ตัวเลขมโน*"
+            f"💯 *ราคาจริงจากตลาดสด 100%*"
         )
 
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("🔄 กดขอสัญญาณสดทันใจ", callback_data="get_signal"))
         
-        bot.send_message(CHAT_ID, card_text, reply_markup=markup, parse_mode="Markdown")
+        bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
         logger.info("Signal sent successfully.")
 
     except Exception as e:
@@ -236,7 +230,7 @@ def generate_signal(chat_id):
 def send_welcome(message):
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("🔄 กดขอสัญญาณสดทันใจ", callback_data="get_signal"))
-    bot.reply_to(message, "🚀 **TITAN FINAL ENGINE พร้อมรบแล้วครับนาย!** 🚀\nกดปุ่มด้านล่างเพื่อรับสัญญาณคู่ที่ดีที่สุด:", reply_markup=markup, parse_mode="Markdown")
+    bot.reply_to(message, "🚀 **TITAN ENGINE พร้อมรบ!** กดปุ่มด้านล่าง:", reply_markup=markup, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
@@ -245,11 +239,17 @@ def handle_callback(call):
             bot.answer_callback_query(call.id)
         except Exception:
             pass
-        
         generate_signal(call.message.chat.id)
 
 if __name__ == "__main__":
-    logger.info("Titan Final Bot is running...")
+    logger.info("Titan Bot is running...")
+    # 🛡️ เคลียร์ Webhook ค้างเพื่อป้องกันปุ่มกดไม่ติดบนคลาวด์
+    try:
+        bot.remove_webhook()
+        time.sleep(1)
+    except Exception:
+        pass
+
     while True:
         try:
             bot.infinity_polling(timeout=25, long_polling_timeout=15)
