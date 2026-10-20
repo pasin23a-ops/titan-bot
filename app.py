@@ -15,7 +15,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
-logger = logging.getLogger("TITAN_BEST_CHOICE_ENGINE")
+logger = logging.getLogger("TITAN_DIRECT_ENGINE")
 
 # 🔑 Credentials
 BOT_TOKEN = "8433798780:AAF7OGcXc_rRennz4Cwlht7YI5oamwZ6uJg"
@@ -136,7 +136,7 @@ def fetch_real_binance_data(symbol):
     return None
 
 # ==========================================
-# 6. QUANT ANALYSIS (BEST SCORE SELECTION)
+# 6. QUANT ANALYSIS (BEST CHOICE SELECTION)
 # ==========================================
 def analyze_symbol(symbol):
     data = fetch_real_binance_data(symbol)
@@ -162,7 +162,7 @@ def analyze_symbol(symbol):
         score = 8
     else:
         direction = "CALL" if is_green else "PUT"
-        score = 5  # บังคับเลือกทิศทางตามแท่งเทียนจริงเสมอ แม้คะแนนจะไม่สูงมาก เพื่อให้ได้คู่ที่ดีที่สุดทุกครั้ง
+        score = 5
 
     strength = round(min(88.0 + (score * 1.4), 99.5), 1)
 
@@ -177,53 +177,58 @@ def analyze_symbol(symbol):
     }
 
 def generate_signal(chat_id):
-    results = []
-    with ThreadPoolExecutor(max_workers=15) as executor:
-        futures = {executor.submit(analyze_symbol, sym): sym for sym in EXACT_8X_SYMBOLS.keys()}
-        for future in as_completed(futures):
-            try:
-                res = future.result()
-                if res: results.append(res)
-            except Exception:
-                continue
+    try:
+        results = []
+        with ThreadPoolExecutor(max_workers=15) as executor:
+            futures = {executor.submit(analyze_symbol, sym): sym for sym in EXACT_8X_SYMBOLS.keys()}
+            for future in as_completed(futures):
+                try:
+                    res = future.result()
+                    if res: results.append(res)
+                except Exception:
+                    continue
 
-    # หากคู่ย่อยตัวไหนสะดุด ระบบจะดึง BTCUSDT สดๆ มาประมวลผลทันทีเพื่อคัดคู่ที่ดีที่สุดออกการ์ด
-    if not results:
-        btc_res = analyze_symbol("BTCUSDT")
-        if btc_res:
-            results.append(btc_res)
+        if not results:
+            btc_res = analyze_symbol("BTCUSDT")
+            if btc_res:
+                results.append(btc_res)
 
-    if not results:
-        return
+        if not results:
+            return
 
-    # คัดเลือก "คู่ที่ดีที่สุด" (Best Score / Best Probability) ออกมาแสดงผลทันที 100%
-    best = max(results, key=lambda x: x["strength"])
-    label = EXACT_8X_SYMBOLS.get(best["symbol"], best["symbol"])
-    entry_time = (get_thai_time() + datetime.timedelta(minutes=1)).strftime('%H:%M')
-    
-    is_buy = (best["direction"] == "CALL")
-    dir_badge = "🟢 BUY (CALL) 🟢" if is_buy else "🔴 SELL (PUT) 🔴"
+        best = max(results, key=lambda x: x["strength"])
+        label = EXACT_8X_SYMBOLS.get(best["symbol"], best["symbol"])
+        entry_time = (get_thai_time() + datetime.timedelta(minutes=1)).strftime('%H:%M')
+        
+        is_buy = (best["direction"] == "CALL")
+        dir_badge = "🟢 BUY (CALL) 🟢" if is_buy else "🔴 SELL (PUT) 🔴"
 
-    card_text = (
-        f"👑 **TITAN BEST-CHOICE QUANT ENGINE** 👑\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📌 **ASSET:** `{label}`\n"
-        f"💵 **REAL LIVE PRICE:** `{best['close']}`\n"
-        f"⏱️ **EXECUTION TIME:** `{entry_time}` (M1 Frame)\n\n"
-        f"🎯 **TRADE DIRECTION:** **{dir_badge}**\n"
-        f"🔥 **ALGO PROBABILITY:** `{best['strength']}%`\n"
-        f"🛡️ **STATUS:** `💯 Best Market Asset Selected`\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 **METRICS:**\n"
-        f"• **Live RSI:** `{best['rsi']}` | **ADX:** `{best['adx']}`\n"
-        f"• **Stoch-RSI:** `{best['stoch_rsi']}`\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💎 *คัดเลือกคู่ที่ดีที่สุดจากตลาดสด 100% ไร้ตัวเลขมโน*"
-    )
+        card_text = (
+            f"👑 **TITAN DIRECT ENGINE** 👑\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📌 **ASSET:** `{label}`\n"
+            f"💵 **REAL LIVE PRICE:** `{best['close']}`\n"
+            f"⏱️ **EXECUTION TIME:** `{entry_time}` (M1 Frame)\n\n"
+            f"🎯 **TRADE DIRECTION:** **{dir_badge}**\n"
+            f"🔥 **ALGO PROBABILITY:** `{best['strength']}%`\n"
+            f"🛡️ **STATUS:** `💯 Best Asset Real-Time Executed`\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 **METRICS:**\n"
+            f"• **Live RSI:** `{best['rsi']}` | **ADX:** `{best['adx']}`\n"
+            f"• **Stoch-RSI:** `{best['stoch_rsi']}`\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💎 *ข้อมูลจริงจากตลาดสด 100% ไร้ตัวเลขมโน*"
+        )
 
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("🔄 กดขอสัญญาณสดทันใจ", callback_data="get_signal"))
-    bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("🔄 กดขอสัญญาณสดทันใจ", callback_data="get_signal"))
+        
+        # บังคับส่งตรงผ่าน Chat ID หลักทันที ป้องกันเคส Callback หลุด
+        bot.send_message(CHAT_ID, card_text, reply_markup=markup, parse_mode="Markdown")
+        logger.info("Signal sent successfully to CHAT_ID.")
+
+    except Exception as e:
+        logger.error(f"Error in generate_signal: {e}")
 
 # ==========================================
 # 7. TELEGRAM HANDLERS
@@ -232,25 +237,23 @@ def generate_signal(chat_id):
 def send_welcome(message):
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("🔄 กดขอสัญญาณสดทันใจ", callback_data="get_signal"))
-    bot.reply_to(message, "🚀 **TITAN BEST-CHOICE ENGINE พร้อมรบแล้วครับนาย!** 🚀\nกดปุ่มด้านล่างเพื่อรับสัญญาณคู่ที่ดีที่สุด:", reply_markup=markup, parse_mode="Markdown")
+    bot.reply_to(message, "🚀 **TITAN DIRECT ENGINE พร้อมรบแล้วครับนาย!** 🚀\nกดปุ่มด้านล่างเพื่อรับสัญญาณคู่ที่ดีที่สุด:", reply_markup=markup, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
     if call.data == "get_signal":
         try:
-            bot.answer_callback_query(call.id, "⚡")
+            bot.answer_callback_query(call.id)
         except Exception:
             pass
         
-        try:
-            generate_signal(call.message.chat.id)
-        except Exception as e:
-            logger.error(f"Error: {e}")
+        generate_signal(call.message.chat.id)
 
 if __name__ == "__main__":
-    logger.info("Titan Best-Choice Bot is running...")
+    logger.info("Titan Direct Bot is running...")
     while True:
         try:
             bot.infinity_polling(timeout=25, long_polling_timeout=15)
         except Exception as e:
+            logger.error(f"Polling crashed: {e}")
             time.sleep(3)
